@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Quote History | Quote Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .industrial-gradient { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+    {% include "_nav.html" %}
+
+    <main class="max-w-5xl mx-auto py-12 px-6">
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold">Quote History</h1>
+                <p class="text-slate-500 text-sm mt-1">Your 50 most recent quotes. Regenerate as a quote or invoice at no extra credit.</p>
+            </div>
+            <a href="{{ url_for('index') }}" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-all">+ New Quote</a>
+        </div>
+
+        {% if quotes %}
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <table class="w-full">
+                <thead class="bg-slate-50 text-left text-xs uppercase text-slate-500 tracking-wider">
+                    <tr>
+                        <th class="px-6 py-3">Label</th>
+                        <th class="px-6 py-3">Date</th>
+                        <th class="px-6 py-3">Panes</th>
+                        <th class="px-6 py-3">Total</th>
+                        <th class="px-6 py-3 text-right">Regenerate</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for q in quotes %}
+                    <tr>
+                        <td class="px-6 py-4">
+                            <span class="font-medium">{{ q.label or '(untitled)' }}</span>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-slate-600 mono">{{ q.created_at.strftime('%Y-%m-%d') if q.created_at else '' }}</td>
+                        <td class="px-6 py-4 mono text-sm">{{ q.pane_count }}</td>
+                        <td class="px-6 py-4 mono text-sm">${{ "%.2f"|format(q.final_price|float) }}</td>
+                        <td class="px-6 py-4 text-right">
+                            <div class="flex justify-end gap-2">
+                                <form method="POST" action="{{ url_for('quote_render_pdf', quote_id=q.id) }}?type=QUOTE">
+                                    <button class="text-sm text-blue-600 hover:underline">Quote PDF</button>
+                                </form>
+                                <form method="POST" action="{{ url_for('quote_render_pdf', quote_id=q.id) }}?type=INVOICE">
+                                    <button class="text-sm text-emerald-600 hover:underline">Invoice PDF</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-500">
+            No quotes saved yet. <a href="{{ url_for('index') }}" class="text-blue-600 hover:underline">Generate your first one</a>.
+        </div>
+        {% endif %}
+    </main>
+</body>
+</html>

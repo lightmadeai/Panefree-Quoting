@@ -1,0 +1,18 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# SQLite database — contains user data + hashed passwords; not tracked
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated PDFs (runtime output)
+quote_*.pdf
+invoice_*.pdf
+
+# Env / secrets
+.env
+.env.local
+.env.*.local

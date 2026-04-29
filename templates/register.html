@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Create Account | Quote Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .industrial-gradient { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+    <nav class="industrial-gradient text-white py-4 px-6 shadow-lg">
+        <span class="text-2xl font-bold tracking-tight">Quote<span class="text-blue-400"> Studio</span></span>
+    </nav>
+
+    <main class="max-w-md mx-auto py-20 px-6">
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+            <h1 class="text-2xl font-semibold mb-2">Create your account</h1>
+            <p class="text-slate-500 text-sm mb-6">Get started with <span class="font-semibold text-blue-600">5 free quote credits</span>.</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% for cat, msg in messages %}
+                <div class="mb-4 px-3 py-2 rounded-md text-sm {% if cat == 'error' %}bg-red-50 text-red-700 border border-red-200{% else %}bg-blue-50 text-blue-700 border border-blue-200{% endif %}">{{ msg }}</div>
+              {% endfor %}
+            {% endwith %}
+
+            <form method="POST" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                    <input type="email" name="email" required autofocus
+                           class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                    <input type="password" name="password" required minlength="6"
+                           class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-all">Create account</button>
+            </form>
+
+            <p class="text-sm text-slate-500 mt-6 text-center">
+                Already have one?
+                <a href="{{ url_for('login') }}" class="text-blue-600 hover:underline font-medium">Sign in</a>
+            </p>
+        </div>
+    </main>
+</body>
+</html>

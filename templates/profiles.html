@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pricing Profiles | Quote Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .industrial-gradient { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+    {% include "_nav.html" %}
+
+    <main class="max-w-4xl mx-auto py-12 px-6">
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold">Pricing Profiles</h1>
+                <p class="text-slate-500 text-sm mt-1">Your saved price sheets. The default is used for new quotes unless overridden.</p>
+            </div>
+            <a href="{{ url_for('profile_new') }}" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-all">+ New Profile</a>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for cat, msg in messages %}
+            <div class="mb-4 px-3 py-2 rounded-md text-sm {% if cat == 'error' %}bg-red-50 text-red-700 border border-red-200{% else %}bg-emerald-50 text-emerald-700 border border-emerald-200{% endif %}">{{ msg }}</div>
+          {% endfor %}
+        {% endwith %}
+
+        {% if profiles %}
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <table class="w-full">
+                <thead class="bg-slate-50 text-left text-xs uppercase text-slate-500 tracking-wider">
+                    <tr>
+                        <th class="px-6 py-3">Name</th>
+                        <th class="px-6 py-3">Base Rate</th>
+                        <th class="px-6 py-3">Callout</th>
+                        <th class="px-6 py-3">Tax</th>
+                        <th class="px-6 py-3 text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for p in profiles %}
+                    <tr>
+                        <td class="px-6 py-4">
+                            <div class="flex items-center gap-2">
+                                <span class="font-medium">{{ p.name }}</span>
+                                {% if p.is_default %}
+                                <span class="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-xs font-semibold rounded">DEFAULT</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 mono text-sm">${{ "%.2f"|format(p.price_data.get('base_pane_rate', 0)|float) }}</td>
+                        <td class="px-6 py-4 mono text-sm">${{ "%.2f"|format(p.price_data.get('base_callout_fee', 0)|float) }}</td>
+                        <td class="px-6 py-4 mono text-sm">{{ "%.1f"|format(p.price_data.get('tax_rate', 0)|float * 100) }}%</td>
+                        <td class="px-6 py-4 text-right">
+                            <div class="flex justify-end gap-2">
+                                {% if not p.is_default %}
+                                <form method="POST" action="{{ url_for('profile_set_default', profile_id=p.id) }}">
+                                    <button class="text-sm text-blue-600 hover:underline">Set Default</button>
+                                </form>
+                                <form method="POST" action="{{ url_for('profile_delete', profile_id=p.id) }}" onsubmit="return confirm('Delete profile {{ p.name }}?')">
+                                    <button class="text-sm text-red-600 hover:underline">Delete</button>
+                                </form>
+                                {% else %}
+                                <span class="text-xs text-slate-400 italic">locked while default</span>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-500">
+            No profiles yet. <a href="{{ url_for('profile_new') }}" class="text-blue-600 hover:underline">Create your first one</a>.
+        </div>
+        {% endif %}
+    </main>
+</body>
+</html>

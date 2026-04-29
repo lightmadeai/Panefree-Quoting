@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quote Generator | Quote Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .industrial-gradient {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+    {% include "_nav.html" %}
+
+    <main class="max-w-4xl mx-auto py-12 px-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Input Form -->
+            <div class="lg:col-span-2 space-y-8">
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                    <h2 class="text-xl font-semibold mb-6 flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-2m-2 0h2M7 21h2m-2 0h-2m2 0h2" />
+                        </svg>
+                        Job Configuration
+                    </h2>
+                    
+                    <form action="/calculate" method="POST" class="space-y-6">
+                    <div class="space-y-2">
+                        <label class="block text-sm font-bold text-slate-500 uppercase tracking-wider">Customer / Job Name</label>
+                        <input type="text" name="label" maxlength="80" value="{{ submitted_label or '' }}"
+                               placeholder="e.g. Smith Family — North Side"
+                               class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                        <p class="text-xs text-slate-400 italic">Shown on the PDF and used to find this quote later in History.</p>
+                    </div>
+
+                    <div class="space-y-4">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">Pricing Profile</h3>
+                            <button type="button" id="new-profile-toggle" class="text-sm text-blue-600 hover:text-blue-700 font-medium">+ New Profile</button>
+                        </div>
+                        <select id="profile-select" name="profile_id" class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                            {% for profile in profiles %}
+                            <option value="{{ profile }}" {% if profile == active_profile %}selected{% endif %}>{{ profile }}</option>
+                            {% endfor %}
+                        </select>
+
+                        <!-- Inline new-profile creator (hidden by default) -->
+                        <div id="new-profile-panel" class="hidden bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <h4 class="text-sm font-bold text-blue-900">Create new profile</h4>
+                                <button type="button" id="new-profile-close" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button>
+                            </div>
+
+                            <div id="new-profile-error" class="hidden bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded"></div>
+
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 mb-1">Name</label>
+                                <input type="text" id="np-name" placeholder="e.g. Commercial High-Rise"
+                                       class="w-full px-2 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                            </div>
+
+                            <div class="grid grid-cols-3 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Base Rate</label>
+                                    <div class="relative">
+                                        <span class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">$</span>
+                                        <input type="number" step="0.01" id="np-base-rate" value="5.00"
+                                               class="w-full pl-5 pr-2 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Callout Fee</label>
+                                    <div class="relative">
+                                        <span class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">$</span>
+                                        <input type="number" step="0.01" id="np-callout" value="75.00"
+                                               class="w-full pl-5 pr-2 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Tax Rate</label>
+                                    <div class="relative">
+                                        <input type="number" step="0.1" id="np-tax" value="10.0"
+                                               class="w-full px-2 pr-6 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                        <span class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">%</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-3 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Floor 1 multiplier</label>
+                                    <div class="relative">
+                                        <input type="number" step="0.01" id="np-f1" value="1.0"
+                                               class="w-full px-2 pr-6 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                        <span class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">×</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Floor 2 multiplier</label>
+                                    <div class="relative">
+                                        <input type="number" step="0.01" id="np-f2" value="1.2"
+                                               class="w-full px-2 pr-6 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                        <span class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">×</span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Floor 3 multiplier</label>
+                                    <div class="relative">
+                                        <input type="number" step="0.01" id="np-f3" value="1.4"
+                                               class="w-full px-2 pr-6 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                        <span class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">×</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-3 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Screen Clean</label>
+                                    <div class="relative">
+                                        <span class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">$</span>
+                                        <input type="number" step="0.01" id="np-screen" value="2.00"
+                                               class="w-full pl-5 pr-2 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Track Clean</label>
+                                    <div class="relative">
+                                        <span class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">$</span>
+                                        <input type="number" step="0.01" id="np-track" value="3.00"
+                                               class="w-full pl-5 pr-2 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-slate-600 mb-1">Hard Water</label>
+                                    <div class="relative">
+                                        <span class="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none">$</span>
+                                        <input type="number" step="0.01" id="np-hardwater" value="5.00"
+                                               class="w-full pl-5 pr-2 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <label class="flex items-center gap-2 text-sm text-slate-700">
+                                <input type="checkbox" id="np-default" class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500">
+                                Set as default
+                            </label>
+
+                            <div class="flex gap-2 pt-1">
+                                <button type="button" id="new-profile-save" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2 px-4 rounded-md transition-all">Save &amp; Use</button>
+                                <button type="button" id="new-profile-cancel" class="text-slate-600 hover:text-slate-800 text-sm py-2 px-4">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <script id="profiles-data" type="application/json">{{ profiles_data | tojson }}</script>
+                    <script>
+                    (function () {
+                        const profilesData = JSON.parse(document.getElementById('profiles-data').textContent);
+                        const select = document.getElementById('profile-select');
+
+                        const setVal = (name, v) => {
+                            const el = document.querySelector(`[name="${name}"]`);
+                            if (el && v !== undefined && v !== null) el.value = v;
+                        };
+
+                        function populateRates(profileName) {
+                            const p = profilesData[profileName];
+                            if (!p) return;
+                            const br = Number(p.base_pane_rate) || 0;
+                            const ss = p.story_surcharges || {};
+                            setVal('override_floor1', (br * (Number(ss.floor1) || 1)).toFixed(2));
+                            setVal('override_floor2', (br * (Number(ss.floor2) || 1)).toFixed(2));
+                            setVal('override_floor3', (br * (Number(ss.floor3) || 1)).toFixed(2));
+
+                            const ar = p.add_on_rates || {};
+                            const addonMap = {
+                                'Screen Cleaning': 'override_addon_Screen_Cleaning',
+                                'Track Cleaning': 'override_addon_Track_Cleaning',
+                                'Hard Water Treatment': 'override_addon_Hard_Water_Treatment',
+                            };
+                            for (const [addonName, field] of Object.entries(addonMap)) {
+                                const v = ar[addonName];
+                                setVal(field, v !== undefined ? Number(v).toFixed(2) : '');
+                            }
+
+                            setVal('tax_override_percent', (Number(p.tax_rate || 0) * 100).toFixed(1));
+                            setVal('callout_override', Number(p.base_callout_fee || 0).toFixed(2));
+                        }
+
+                        select.addEventListener('change', () => populateRates(select.value));
+                        // Initial population for the currently-selected profile
+                        if (select.value) populateRates(select.value);
+
+                        // Expose for the inline-new-profile JS below to call after creating a profile
+                        window.__populateRates = populateRates;
+                        window.__profilesData = profilesData;
+                    })();
+
+                    (function () {
+                        const toggle = document.getElementById('new-profile-toggle');
+                        const closeBtn = document.getElementById('new-profile-close');
+                        const cancelBtn = document.getElementById('new-profile-cancel');
+                        const panel = document.getElementById('new-profile-panel');
+                        const saveBtn = document.getElementById('new-profile-save');
+                        const errEl = document.getElementById('new-profile-error');
+                        const select = document.getElementById('profile-select');
+
+                        const open = () => { panel.classList.remove('hidden'); errEl.classList.add('hidden'); };
+                        const close = () => { panel.classList.add('hidden'); };
+
+                        toggle.addEventListener('click', open);
+                        closeBtn.addEventListener('click', close);
+                        cancelBtn.addEventListener('click', close);
+
+                        saveBtn.addEventListener('click', async function () {
+                            errEl.classList.add('hidden');
+                            const name = document.getElementById('np-name').value.trim();
+                            if (!name) { errEl.textContent = 'Name is required.'; errEl.classList.remove('hidden'); return; }
+
+                            const num = id => parseFloat(document.getElementById(id).value);
+                            const price_data = {
+                                base_pane_rate: num('np-base-rate'),
+                                base_callout_fee: num('np-callout'),
+                                tax_rate: num('np-tax') / 100,  // user enters percent, stored as decimal
+                                story_surcharges: { floor1: num('np-f1'), floor2: num('np-f2'), floor3: num('np-f3') },
+                                add_on_rates: {
+                                    'Screen Cleaning': num('np-screen'),
+                                    'Track Cleaning': num('np-track'),
+                                    'Hard Water Treatment': num('np-hardwater'),
+                                },
+                            };
+
+                            saveBtn.disabled = true;
+                            saveBtn.textContent = 'Saving…';
+                            try {
+                                const res = await fetch('/api/profiles/create', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({
+                                        name,
+                                        price_data,
+                                        make_default: document.getElementById('np-default').checked,
+                                    }),
+                                });
+                                const body = await res.json();
+                                if (!res.ok || body.status !== 'success') throw new Error(body.message || 'Save failed');
+
+                                // Add + select new profile in the dropdown
+                                const opt = document.createElement('option');
+                                opt.value = body.profile.name;
+                                opt.textContent = body.profile.name;
+                                opt.selected = true;
+                                select.appendChild(opt);
+                                select.value = body.profile.name;
+
+                                // Register the new profile's price_data for client-side auto-fill,
+                                // then populate the rate fields with it.
+                                if (window.__profilesData) window.__profilesData[body.profile.name] = price_data;
+                                if (window.__populateRates) window.__populateRates(body.profile.name);
+
+                                close();
+                            } catch (e) {
+                                errEl.textContent = e.message;
+                                errEl.classList.remove('hidden');
+                            } finally {
+                                saveBtn.disabled = false;
+                                saveBtn.textContent = 'Save & Use';
+                            }
+                        });
+                    })();
+                    </script>
+                    <div class="space-y-4">
+                        <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">Window Pane Counts</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="space-y-2">
+                                <label class="block text-sm font-medium text-slate-700">Floor 1</label>
+                                <div class="space-y-2">
+                                    <input type="number" name="floor1" value="0" min="0" placeholder="# panes"
+                                           class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                                    <div class="relative">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">$</span>
+                                        <input type="number" step="0.01" name="override_floor1" placeholder="per pane"
+                                               class="w-full pl-7 pr-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="space-y-2">
+                                <label class="block text-sm font-medium text-slate-700">Floor 2</label>
+                                <div class="space-y-2">
+                                    <input type="number" name="floor2" value="0" min="0" placeholder="# panes"
+                                           class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                                    <div class="relative">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">$</span>
+                                        <input type="number" step="0.01" name="override_floor2" placeholder="per pane"
+                                               class="w-full pl-7 pr-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="space-y-2">
+                                <label class="block text-sm font-medium text-slate-700">Floor 3</label>
+                                <div class="space-y-2">
+                                    <input type="number" name="floor3" value="0" min="0" placeholder="# panes"
+                                           class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                                    <div class="relative">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">$</span>
+                                        <input type="number" step="0.01" name="override_floor3" placeholder="per pane"
+                                               class="w-full pl-7 pr-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                        <!-- Add-ons Section -->
+                        <div class="space-y-4">
+                            <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">Professional Add-ons</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-1 gap-3">
+                                <!-- Screen Cleaning -->
+                                <div class="flex items-center justify-between p-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors group">
+                                    <label class="flex items-center cursor-pointer">
+                                        <input type="checkbox" name="addon" value="Screen Cleaning" 
+                                               class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500">
+                                        <span class="ml-3 text-sm text-slate-700 group-hover:text-slate-900">Screen Cleaning</span>
+                                    </label>
+                                    <div class="relative w-40">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">$</span>
+                                        <input type="number" step="0.01" name="override_addon_Screen_Cleaning" placeholder="Rate"
+                                               class="w-full pl-7 pr-3 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                    </div>
+                                </div>
+                                <!-- Track Cleaning -->
+                                <div class="flex items-center justify-between p-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors group">
+                                    <label class="flex items-center cursor-pointer">
+                                        <input type="checkbox" name="addon" value="Track Cleaning" 
+                                               class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500">
+                                        <span class="ml-3 text-sm text-slate-700 group-hover:text-slate-900">Track Cleaning</span>
+                                    </label>
+                                    <div class="relative w-40">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">$</span>
+                                        <input type="number" step="0.01" name="override_addon_Track_Cleaning" placeholder="Rate"
+                                               class="w-full pl-7 pr-3 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                    </div>
+                                </div>
+                                <!-- Hard Water Treatment -->
+                                <div class="flex items-center justify-between p-3 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors group">
+                                    <label class="flex items-center cursor-pointer">
+                                        <input type="checkbox" name="addon" value="Hard Water Treatment" 
+                                               class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500">
+                                        <span class="ml-3 text-sm text-slate-700 group-hover:text-slate-900">Hard Water Treatment</span>
+                                    </label>
+                                    <div class="relative w-40">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">$</span>
+                                        <input type="number" step="0.01" name="override_addon_Hard_Water_Treatment" placeholder="Rate"
+                                               class="w-full pl-7 pr-3 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="pt-4">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                <div class="space-y-2">
+                                    <label class="block text-sm font-bold text-slate-500 uppercase tracking-wider">Callout Fee</label>
+                                    <div class="relative">
+                                        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">$</span>
+                                        <input type="number" step="0.01" name="callout_override" placeholder="75.00"
+                                               class="w-full pl-8 pr-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+                                    </div>
+                                    <p class="text-xs text-slate-400 italic">Auto-filled from profile. Override if needed.</p>
+                                </div>
+                                <div class="space-y-2">
+                                    <label class="block text-sm font-bold text-slate-500 uppercase tracking-wider">Tax Rate</label>
+                                    <div class="relative">
+                                        <input type="number" step="0.1" name="tax_override_percent" placeholder="8.5"
+                                               class="w-full px-3 pr-9 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none transition-all">
+                                        <span class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">%</span>
+                                    </div>
+                                    <p class="text-xs text-slate-400 italic">Auto-filled from profile. Override if needed.</p>
+                                </div>
+                            </div>
+                            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-all transform active:scale-95 flex justify-center items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-12a2 2 0 00-2-2h-2m-2 0h2m-2 0h2M7 13a2 2 0 002 2h10a2 2 0 002-2v-2M7 13a2 2 0 002-2h10a2 2 0 002-2v-2" />
+                                </svg>
+                                Generate Quote
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Results Summary -->
+            <div class="lg:col-span-1 space-y-6">
+                <div class="bg-slate-900 text-white rounded-xl shadow-xl p-6 sticky top-8">
+                    <h2 class="text-lg font-semibold mb-6 flex items-center gap-2 border-b border-slate-700 pb-4">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Estimate Summary
+                    </h2>
+                    
+                    {% if result %}
+                    <div class="space-y-4">
+                        <div class="flex justify-between items-center py-2 border-b border-slate-800">
+                            <span class="text-slate-400 text-sm">Subtotal</span>
+                            <span class="mono font-medium">${{ "%.2f"|format(result.calculation.final_before_tax) }}</span>
+                        </div>
+                        <div class="flex justify-between items-center py-2 border-b border-slate-800">
+                            <span class="text-slate-400 text-sm">Tax</span>
+                            <span class="mono font-medium">${{ "%.2f"|format(result.calculation.tax_amount) }}</span>
+                        </div>
+                        <div class="flex justify-between items-center py-4">
+                            <span class="text-white font-bold text-lg">Grand Total</span>
+                            <span class="mono font-bold text-2xl text-blue-400">${{ "%.2f"|format(result.calculation.grand_total) }}</span>
+                        </div>
+                        
+                        <button id="download-pdf-btn" type="button"
+                                class="block w-full text-center bg-white text-slate-900 font-bold py-3 px-6 rounded-lg hover:bg-slate-100 transition-all shadow-lg transform active:scale-95 flex justify-center items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            <span id="download-pdf-label">Download Quote PDF</span>
+                        </button>
+
+                        <button id="convert-invoice-btn" type="button" disabled
+                                class="mt-2 block w-full text-center bg-slate-800 text-slate-300 font-semibold py-2.5 px-6 rounded-lg border border-slate-700 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex justify-center items-center gap-2">
+                            <span id="convert-invoice-label">Convert to Invoice (free)</span>
+                        </button>
+                        <p class="text-xs text-slate-500 italic mt-1">Generate a quote first — then convert to an invoice at no extra credit.</p>
+                        <div id="download-error" class="hidden mt-3 text-sm text-red-400"></div>
+
+                        {% if benchmark %}
+                        <div class="mt-4 text-xs text-slate-400 border-t border-slate-800 pt-3 leading-relaxed">
+                            Your average for jobs of this size: <span class="mono text-slate-200">${{ "%.2f"|format(benchmark.avg_per_pane|float) }}</span>/pane
+                            (over {{ benchmark.sample_size }} past quote{% if benchmark.sample_size != 1 %}s{% endif %}).
+                            Current quote: <span class="mono text-slate-200">${{ "%.2f"|format(benchmark.current_per_pane|float) }}</span>/pane.
+                        </div>
+                        {% endif %}
+
+                        <script id="quote-payload" type="application/json">
+                            {{ {
+                                "panes": result.input.panes,
+                                "add_ons": result.input.add_ons,
+                                "profile_id": result.profile_id,
+                                "overrides": result.input.overrides,
+                                "addon_overrides": result.input.addon_overrides,
+                                "tax_override": result.input.tax_override,
+                                "label": submitted_label or "",
+                            } | tojson }}
+                        </script>
+                        <script>
+                        (function () {
+                            const btn = document.getElementById('download-pdf-btn');
+                            const label = document.getElementById('download-pdf-label');
+                            const invBtn = document.getElementById('convert-invoice-btn');
+                            const invLabel = document.getElementById('convert-invoice-label');
+                            const errEl = document.getElementById('download-error');
+                            const badge = document.getElementById('credit-badge');
+                            const payload = JSON.parse(document.getElementById('quote-payload').textContent);
+
+                            let generatedQuoteId = null;
+
+                            btn.addEventListener('click', async function () {
+                                btn.disabled = true;
+                                errEl.classList.add('hidden');
+                                label.textContent = 'Generating…';
+
+                                try {
+                                    const res = await fetch('/generate', {
+                                        method: 'POST',
+                                        headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify(payload),
+                                    });
+
+                                    if (res.status === 402) {
+                                        const body = await res.json().catch(() => ({}));
+                                        window.location.href = body.redirect || '/top-up';
+                                        return;
+                                    }
+
+                                    const data = await res.json();
+                                    if (!res.ok || data.status !== 'success') {
+                                        throw new Error(data.message || 'Failed to generate PDF.');
+                                    }
+
+                                    badge.textContent = data.credits_remaining + ' credits';
+                                    label.textContent = 'Downloading…';
+                                    window.location.href = data.download_url;
+
+                                    generatedQuoteId = data.quote_id;
+                                    invBtn.disabled = false;
+                                    invBtn.classList.remove('bg-slate-800', 'text-slate-300');
+                                    invBtn.classList.add('bg-emerald-600', 'hover:bg-emerald-500', 'text-white');
+
+                                    setTimeout(() => { label.textContent = 'Download Quote PDF'; btn.disabled = false; }, 1500);
+                                } catch (e) {
+                                    errEl.textContent = e.message;
+                                    errEl.classList.remove('hidden');
+                                    label.textContent = 'Download Quote PDF';
+                                    btn.disabled = false;
+                                }
+                            });
+
+                            invBtn.addEventListener('click', async function () {
+                                if (!generatedQuoteId) return;
+                                invBtn.disabled = true;
+                                errEl.classList.add('hidden');
+                                invLabel.textContent = 'Converting…';
+                                try {
+                                    const res = await fetch(`/quotes/${generatedQuoteId}/pdf?type=INVOICE`, {
+                                        method: 'POST',
+                                        headers: {'Accept': 'application/json'},
+                                    });
+                                    const data = await res.json();
+                                    if (!res.ok || data.status !== 'success') {
+                                        throw new Error(data.message || 'Failed to convert to invoice.');
+                                    }
+                                    invLabel.textContent = 'Downloading…';
+                                    window.location.href = data.download_url;
+                                    setTimeout(() => { invLabel.textContent = 'Convert to Invoice (free)'; invBtn.disabled = false; }, 1500);
+                                } catch (e) {
+                                    errEl.textContent = e.message;
+                                    errEl.classList.remove('hidden');
+                                    invLabel.textContent = 'Convert to Invoice (free)';
+                                    invBtn.disabled = false;
+                                }
+                            });
+                        })();
+                        </script>
+                    </div>
+                    {% else %}
+                    <div class="text-center py-12 space-y-4">
+                        <div class="text-slate-500 italic text-sm">Enter job details to see the estimated cost.</div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

@@ -51,28 +51,33 @@ def load_user(user_id):
     return user
 
 
-def _ensure_user_columns():
+def _ensure_table_columns(table_name, additions):
     """
     SQLite lacks ALTER TABLE ... ADD COLUMN IF NOT EXISTS, and db.create_all()
     only creates missing tables — not missing columns. This runs once at boot
-    and additively patches columns added after initial users-table creation.
+    and additively patches columns added after a table was first created.
     """
-    existing = {row[1] for row in db.session.execute(text("PRAGMA table_info(users)")).fetchall()}
-    additions = [
-        ("business_name", "TEXT"),
-        ("phone_number", "TEXT"),
-        ("quote_footer_text", "TEXT"),
-        ("invoice_footer_text", "TEXT"),
-    ]
+    existing = {row[1] for row in db.session.execute(text(f"PRAGMA table_info({table_name})")).fetchall()}
     for col, ddl in additions:
         if col not in existing:
-            db.session.execute(text(f"ALTER TABLE users ADD COLUMN {col} {ddl}"))
+            db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col} {ddl}"))
     db.session.commit()
 
 
 with app.app_context():
     db.create_all()
-    _ensure_user_columns()
+    _ensure_table_columns("users", [
+        ("business_name", "TEXT"),
+        ("phone_number", "TEXT"),
+        ("quote_footer_text", "TEXT"),
+        ("invoice_footer_text", "TEXT"),
+    ])
+    _ensure_table_columns("quotes", [
+        ("customer_name", "TEXT"),
+        ("customer_address", "TEXT"),
+        ("customer_email", "TEXT"),
+        ("customer_phone", "TEXT"),
+    ])
 
 
 # ---------- Profile helpers (engine-agnostic controller layer) ----------
@@ -161,27 +166,31 @@ def apply_callout_override(registry, profile_id, callout_override):
 
 LABEL_MAX_LEN = 80
 FOOTER_MAX_LEN = 200
+CUSTOMER_NAME_MAX = 100
+CUSTOMER_ADDR_MAX = 200
+CUSTOMER_EMAIL_MAX = 254  # RFC 5321 max length
+CUSTOMER_PHONE_MAX = 30
+
+
+def _sanitize_storage(raw, max_len):
+    """
+    Storage-layer sanitize: trim, collapse whitespace, cap length.
+    Latin-1 stripping is intentionally NOT done here so the DB keeps full
+    unicode (smart quotes, etc.) for display in forms. The generator runs
+    a Latin-1 strip as defense in depth before rendering. Heresy #10.
+    """
+    if not raw:
+        return ""
+    cleaned = " ".join(str(raw).split())
+    return cleaned[:max_len]
 
 
 def sanitize_label(raw):
-    """Trim, strip newlines/control chars, cap length. Heresy #10."""
-    if not raw:
-        return ""
-    cleaned = " ".join(str(raw).split())
-    return cleaned[:LABEL_MAX_LEN]
+    return _sanitize_storage(raw, LABEL_MAX_LEN)
 
 
 def sanitize_footer(raw):
-    """
-    Storage-layer sanitize for the user-editable footer templates. Mirrors
-    sanitize_label (Heresy #10) — trim, collapse whitespace, length-cap.
-    Latin-1 stripping is left to the generator's defense-in-depth pass so
-    the DB keeps full unicode (smart quotes etc.) for display in the form.
-    """
-    if not raw:
-        return ""
-    cleaned = " ".join(str(raw).split())
-    return cleaned[:FOOTER_MAX_LEN]
+    return _sanitize_storage(raw, FOOTER_MAX_LEN)
 
 
 def render_footer_template(template, doc_type, phone_number):
@@ -412,6 +421,10 @@ def _parse_quote_form():
         "tax_override": tax_override_decimal,
         "callout_override": request.form.get("callout_override"),
         "label": request.form.get("label"),
+        "customer_name": request.form.get("customer_name"),
+        "customer_address": request.form.get("customer_address"),
+        "customer_email": request.form.get("customer_email"),
+        "customer_phone": request.form.get("customer_phone"),
     }
 
 
@@ -445,6 +458,10 @@ def calculate():
                 credit_packs=config.CREDIT_PACKS,
                 benchmark=benchmark,
                 submitted_label=sanitize_label(data.get("label")),
+                submitted_customer_name=_sanitize_storage(data.get("customer_name"), CUSTOMER_NAME_MAX),
+                submitted_customer_address=_sanitize_storage(data.get("customer_address"), CUSTOMER_ADDR_MAX),
+                submitted_customer_email=_sanitize_storage(data.get("customer_email"), CUSTOMER_EMAIL_MAX),
+                submitted_customer_phone=_sanitize_storage(data.get("customer_phone"), CUSTOMER_PHONE_MAX),
             )
         return jsonify({"status": "success", "calculation": snapshot["calculation"]})
     except Exception as e:
@@ -490,6 +507,10 @@ def generate():
         filename = f"{doc_type.lower()}_{uuid.uuid4().hex[:6]}.pdf"
         output_path = os.path.join(project_root, filename)
         label = sanitize_label(data.get("label"))
+        customer_name = _sanitize_storage(data.get("customer_name"), CUSTOMER_NAME_MAX)
+        customer_address = _sanitize_storage(data.get("customer_address"), CUSTOMER_ADDR_MAX)
+        customer_email = _sanitize_storage(data.get("customer_email"), CUSTOMER_EMAIL_MAX)
+        customer_phone = _sanitize_storage(data.get("customer_phone"), CUSTOMER_PHONE_MAX)
         pane_count = sum(int(v) for v in snapshot["input"]["panes"].values())
 
         # Insert the Quote row up-front so we have an autoincrement id to
@@ -502,6 +523,10 @@ def generate():
             final_price=Decimal(str(snapshot["calculation"]["grand_total"])),
             pane_count=pane_count,
             quote_data=_serialize_for_json(snapshot),
+            customer_name=customer_name or None,
+            customer_address=customer_address or None,
+            customer_email=customer_email or None,
+            customer_phone=customer_phone or None,
         )
         db.session.add(quote)
         db.session.flush()
@@ -520,6 +545,10 @@ def generate():
             invoice_footer=render_footer_template(
                 current_user.invoice_footer_text, "INVOICE", current_user.phone_number,
             ),
+            customer_name=customer_name,
+            customer_address=customer_address,
+            customer_email=customer_email,
+            customer_phone=customer_phone,
         )
         db.session.commit()
     except Exception as e:
@@ -745,6 +774,10 @@ def quote_render_pdf(quote_id):
             invoice_footer=render_footer_template(
                 current_user.invoice_footer_text, "INVOICE", current_user.phone_number,
             ),
+            customer_name=q.customer_name,
+            customer_address=q.customer_address,
+            customer_email=q.customer_email,
+            customer_phone=q.customer_phone,
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400

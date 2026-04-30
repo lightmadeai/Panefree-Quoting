@@ -16,6 +16,10 @@ DEFAULT_INVOICE_FOOTER = "Payment due within 14 days | Questions? Call {{phone}}
 # defense; the controller also caps on save.
 LABEL_MAX_LEN = 80
 FOOTER_MAX_LEN = 200
+CUSTOMER_NAME_MAX = 100
+CUSTOMER_ADDR_MAX = 200
+CUSTOMER_EMAIL_MAX = 254  # RFC 5321 max length
+CUSTOMER_PHONE_MAX = 30
 
 
 _UNICODE_REPLACEMENTS = {
@@ -82,7 +86,9 @@ def derive_doc_code(quote_id):
 
 def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
                       business_name=None, phone_number=None, label=None,
-                      doc_code=None, quote_footer=None, invoice_footer=None):
+                      doc_code=None, quote_footer=None, invoice_footer=None,
+                      customer_name=None, customer_address=None,
+                      customer_email=None, customer_phone=None):
     """
     Generates a professional PDF based on a quote snapshot.
     This is a PURE VIEW. No calculations are performed here.
@@ -115,14 +121,27 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
     pdf.cell(0, 10, doc_title, ln=True, align="R")
     pdf.ln(5)
 
-    # Client/Job Info
+    # Bill To block — customer contact info. Each field is sanitized
+    # defensively here (Heresy #10 second layer); controller already
+    # length-caps on save. customer_name falls back to the legacy `label`
+    # for quotes created before customer_* columns existed.
+    safe_name = _sanitize_text(customer_name, CUSTOMER_NAME_MAX) or _sanitize_label(label)
+    safe_address = _sanitize_text(customer_address, CUSTOMER_ADDR_MAX)
+    safe_email = _sanitize_text(customer_email, CUSTOMER_EMAIL_MAX)
+    safe_phone = _sanitize_text(customer_phone, CUSTOMER_PHONE_MAX)
+
     pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 10, "Job Details", ln=True)
+    pdf.cell(0, 10, "Bill To:", ln=True)
     pdf.set_font("helvetica", "", 11)
-    safe_label = _sanitize_label(label)
-    if safe_label:
-        pdf.cell(0, 7, f"Customer: {safe_label}", ln=True)
-    pdf.cell(0, 7, f"Date: {snapshot['timestamp'][:10]}", ln=True)
+    if safe_name:
+        pdf.cell(0, 6, safe_name, ln=True)
+    if safe_address:
+        pdf.multi_cell(0, 6, safe_address)
+    if safe_email:
+        pdf.cell(0, 6, safe_email, ln=True)
+    if safe_phone:
+        pdf.cell(0, 6, safe_phone, ln=True)
+    pdf.cell(0, 6, f"Date: {snapshot['timestamp'][:10]}", ln=True)
     pdf.ln(5)
 
     # Line Items Table

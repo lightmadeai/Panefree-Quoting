@@ -64,6 +64,13 @@ class Quote(db.Model):
     label = db.Column(db.Text, nullable=False, default="")
     final_price = db.Column(db.Numeric(12, 2), nullable=False, default=Decimal("0.00"))
     pane_count = db.Column(db.Integer, nullable=False, default=0)
+    # Customer ("Bill To") fields rendered on the PDF. All nullable for
+    # back-compat with quotes created before this column existed; the
+    # generator falls back to the legacy `label` if customer_name is empty.
+    customer_name = db.Column(db.Text, nullable=True)
+    customer_address = db.Column(db.Text, nullable=True)
+    customer_email = db.Column(db.Text, nullable=True)
+    customer_phone = db.Column(db.Text, nullable=True)
     # Full input+calculation snapshot. Decimal values are stored as strings
     # inside this JSON so rehydration is lossless (Heresy #11).
     quote_data = db.Column(db.JSON, nullable=False)

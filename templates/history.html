@@ -39,7 +39,18 @@
                     {% for q in quotes %}
                     <tr>
                         <td class="px-6 py-4">
-                            <span class="font-medium">{{ q.label or '(untitled)' }}</span>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="font-medium">{{ q.label or '(untitled)' }}</span>
+                                {# Show the claimed invoice number once a quote has been
+                                   converted to an invoice (Feature 2). Null until first
+                                   conversion. Format mirrors generator.py's title format
+                                   so users see the same INV-NNNNNN string everywhere. #}
+                                {% if q.invoice_number %}
+                                <span class="mono text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    INV-{{ "%06d"|format(q.invoice_number) }}
+                                </span>
+                                {% endif %}
+                            </div>
                         </td>
                         <td class="px-6 py-4 text-sm text-slate-600 mono">{{ q.created_at.strftime('%Y-%m-%d') if q.created_at else '' }}</td>
                         <td class="px-6 py-4 mono text-sm">{{ q.pane_count }}</td>

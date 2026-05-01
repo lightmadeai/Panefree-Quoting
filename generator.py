@@ -133,14 +133,18 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
     pdf.set_font("helvetica", "B", 12)
     pdf.cell(0, 10, "Bill To:", ln=True)
     pdf.set_font("helvetica", "", 11)
+    # multi_cell for all customer fields so long emails/addresses wrap.
+    # new_x="LMARGIN" is critical: fpdf2's multi_cell defaults to
+    # new_x="RIGHT", which left subsequent cells starting at the right
+    # margin (visible bug: email rendered clipped against the page edge).
     if safe_name:
-        pdf.cell(0, 6, safe_name, ln=True)
+        pdf.multi_cell(0, 6, safe_name, new_x="LMARGIN", new_y="NEXT")
     if safe_address:
-        pdf.multi_cell(0, 6, safe_address)
+        pdf.multi_cell(0, 6, safe_address, new_x="LMARGIN", new_y="NEXT")
     if safe_email:
-        pdf.cell(0, 6, safe_email, ln=True)
+        pdf.multi_cell(0, 6, safe_email, new_x="LMARGIN", new_y="NEXT")
     if safe_phone:
-        pdf.cell(0, 6, safe_phone, ln=True)
+        pdf.multi_cell(0, 6, safe_phone, new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 6, f"Date: {snapshot['timestamp'][:10]}", ln=True)
     pdf.ln(5)
 

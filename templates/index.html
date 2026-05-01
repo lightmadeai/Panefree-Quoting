@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quote Generator | Quote Studio</title>
+    <title>Quote Generator | Panefree Quotes</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
     <style>
@@ -23,12 +23,7 @@
             <!-- Input Form -->
             <div class="lg:col-span-2 space-y-8">
                 <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                    <h2 class="text-xl font-semibold mb-6 flex items-center gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-2m-2 0h2M7 21h2m-2 0h-2m2 0h2" />
-                        </svg>
-                        Job Configuration
-                    </h2>
+                    <h2 class="text-xl font-semibold mb-6">Job Configuration</h2>
                     
                     <form action="/calculate" method="POST" class="space-y-6">
                     <div class="space-y-2">
@@ -225,8 +220,20 @@
                         }
 
                         select.addEventListener('change', () => populateRates(select.value));
-                        // Initial population for the currently-selected profile
-                        if (select.value) populateRates(select.value);
+                        // Initial population must wait for DOMContentLoaded: this script
+                        // is inline above the override inputs (override_floor1, addon
+                        // rates, tax/callout). At parse time those elements don't exist
+                        // yet, so querySelector returns null and setVal silently no-ops.
+                        // Deferring to DOMContentLoaded guarantees the full form is in
+                        // the DOM before we try to fill it.
+                        const initialPopulate = () => {
+                            if (select.value) populateRates(select.value);
+                        };
+                        if (document.readyState === 'loading') {
+                            document.addEventListener('DOMContentLoaded', initialPopulate);
+                        } else {
+                            initialPopulate();
+                        }
 
                         // Expose for the inline-new-profile JS below to call after creating a profile
                         window.__populateRates = populateRates;
@@ -437,6 +444,15 @@
                     </h2>
                     
                     {% if result %}
+                    <script>
+                        // After a POST to /calculate the URL bar shows /calculate, so
+                        // hitting Ctrl+R re-submits the form and the previous quote
+                        // sticks around. Rewriting the URL to "/" makes refresh hit the
+                        // fresh GET form instead. (Pure UX shim — server logic unchanged.)
+                        if (window.location.pathname !== '/') {
+                            window.history.replaceState({}, '', '/');
+                        }
+                    </script>
                     <div class="space-y-4">
                         <div class="flex justify-between items-center py-2 border-b border-slate-800">
                             <span class="text-slate-400 text-sm">Subtotal</span>
@@ -483,6 +499,10 @@
                                 "addon_overrides": result.input.addon_overrides,
                                 "tax_override": result.input.tax_override,
                                 "label": submitted_label or "",
+                                "customer_name": submitted_customer_name or "",
+                                "customer_address": submitted_customer_address or "",
+                                "customer_email": submitted_customer_email or "",
+                                "customer_phone": submitted_customer_phone or "",
                             } | tojson }}
                         </script>
                         <script>

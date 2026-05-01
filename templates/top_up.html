@@ -41,7 +41,12 @@
                 {% endif %}
                 <h3 class="text-xl font-bold">{{ pack.name }}</h3>
                 <div class="mt-4">
-                    <span class="text-4xl font-bold mono">${{ "%.0f"|format(pack.price_cents / 100.0) }}</span>
+                    {# Render integer dollar amounts as bare ($49) and non-integer
+                       amounts with two decimals ($9.99). The previous "%.0f"
+                       silently rounded $9.99 to $10, hiding the psychological
+                       pricing that the .99 endings are explicitly designed for. #}
+                    {% set dollars = pack.price_cents / 100.0 %}
+                    <span class="text-4xl font-bold mono">${{ "%.2f"|format(dollars)|replace(".00", "") }}</span>
                 </div>
                 <div class="mt-2 text-slate-600">
                     <span class="font-semibold">{{ pack.credits }}</span> PDF credits

@@ -21,6 +21,13 @@ class User(UserMixin, db.Model):
     # the controller substitutes before rendering. Generator stays a Pure View.
     quote_footer_text = db.Column(db.Text, nullable=True)
     invoice_footer_text = db.Column(db.Text, nullable=True)
+    # Per-user counter for legally-compliant gap-free invoice numbers.
+    # Claimed and incremented atomically the first time a Quote is rendered
+    # as an INVOICE (see app.py:_claim_invoice_number). Quote.invoice_number
+    # caches the claimed value so re-renders are idempotent. Starts at 1;
+    # never decreases (gap = audit red flag). No rollover at any width: the
+    # display pad in generator.py is min-width, not max-width.
+    next_invoice_number = db.Column(db.Integer, nullable=False, default=1)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     transactions = db.relationship("Transaction", backref="user", lazy=True)
@@ -71,6 +78,13 @@ class Quote(db.Model):
     customer_address = db.Column(db.Text, nullable=True)
     customer_email = db.Column(db.Text, nullable=True)
     customer_phone = db.Column(db.Text, nullable=True)
+    # Sequential invoice number, claimed once on first INVOICE render via
+    # an atomic UPDATE on the User row (see app.py:_claim_invoice_number).
+    # Null until then — quotes that are only ever rendered as QUOTE PDFs
+    # stay null forever, which is correct (only invoices need the legal
+    # number). Format on PDF: "INV-000001" (zero-padded to 6 digits, but
+    # the column itself has no width cap; integer can grow indefinitely).
+    invoice_number = db.Column(db.Integer, nullable=True)
     # Full input+calculation snapshot. Decimal values are stored as strings
     # inside this JSON so rehydration is lossless (Heresy #11).
     quote_data = db.Column(db.JSON, nullable=False)

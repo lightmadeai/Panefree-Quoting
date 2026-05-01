@@ -88,7 +88,8 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
                       business_name=None, phone_number=None, label=None,
                       doc_code=None, quote_footer=None, invoice_footer=None,
                       customer_name=None, customer_address=None,
-                      customer_email=None, customer_phone=None):
+                      customer_email=None, customer_phone=None,
+                      invoice_number=None):
     """
     Generates a professional PDF based on a quote snapshot.
     This is a PURE VIEW. No calculations are performed here.
@@ -97,6 +98,14 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
     from derive_doc_code(quote.id) so re-renders of the same stored quote
     (quote/invoice conversions, history re-downloads) share one number.
     Falls back to a random UUID for ad-hoc callers without a persisted row.
+
+    invoice_number: when doc_type=="INVOICE" and this is set, the title
+    renders as "INVOICE #INV-000001" (zero-padded to 6 digits) — the
+    sequential, gap-free legal number claimed by the controller. Falls
+    back to the doc_code hash for QUOTE renders or any caller that doesn't
+    pass one (legacy / smoke tests). Generator stays a pure view: the
+    claim/persistence logic lives in app.py, this just formats what it's
+    given. Pad is min-width — values >999999 just render wider, no rollover.
 
     quote_footer / invoice_footer: pre-rendered footer strings (placeholders
     already substituted by the controller). The active doc_type picks one;
@@ -117,7 +126,15 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
     pdf.set_font("helvetica", "B", 16)
     pdf.set_text_color(0, 0, 0)
     code = doc_code or uuid.uuid4().hex[:8].upper()
-    doc_title = f"{doc_type} #{code}"
+    # INVOICE with a claimed sequential number gets the legal "INV-NNNNNN"
+    # format (Feature 2). All other cases — QUOTE renders, or invoices
+    # without a claimed number (smoke tests, ad-hoc callers) — fall back
+    # to the opaque doc_code hash. The `:06d` is zero-pad-min-width: 1
+    # renders as "000001", but 1234567 renders as "1234567" (no truncation).
+    if doc_type == "INVOICE" and invoice_number is not None:
+        doc_title = f"INVOICE #INV-{invoice_number:06d}"
+    else:
+        doc_title = f"{doc_type} #{code}"
     pdf.cell(0, 10, doc_title, ln=True, align="R")
     pdf.ln(5)
 

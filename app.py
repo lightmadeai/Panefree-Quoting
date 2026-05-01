@@ -71,12 +71,20 @@ with app.app_context():
         ("phone_number", "TEXT"),
         ("quote_footer_text", "TEXT"),
         ("invoice_footer_text", "TEXT"),
+        # Per-user sequential invoice counter (Feature 2). Default 1 so the
+        # first claim returns 1 and post-increment leaves 2 for next time.
+        ("next_invoice_number", "INTEGER NOT NULL DEFAULT 1"),
     ])
     _ensure_table_columns("quotes", [
         ("customer_name", "TEXT"),
         ("customer_address", "TEXT"),
         ("customer_email", "TEXT"),
         ("customer_phone", "TEXT"),
+        # Cached claimed invoice number (Feature 2). Nullable: a Quote that
+        # is never rendered as an INVOICE never gets one. Set once, never
+        # changed — the gap-free monotonic invariant lives in the User
+        # counter, this column just memoizes the claim per Quote.
+        ("invoice_number", "INTEGER"),
     ])
 
 
@@ -250,6 +258,53 @@ def load_quote_snapshot(quote):
     """Return a snapshot dict ready to pass to generate_document()."""
     raw = dict(quote.quote_data or {})
     return _rehydrate_decimals(raw, None)
+
+
+def _claim_invoice_number(quote):
+    """
+    Atomically claim the next sequential invoice number for this quote's
+    owner and persist it on the Quote row (Feature 2: tax/legal compliance —
+    invoice numbers must be sequential and gap-free).
+
+    Idempotent: if the quote already has an invoice_number, return it
+    unchanged. This is what makes re-renders of the same invoice show the
+    same number (a downloader hitting refresh, the user re-printing months
+    later, etc.) — the gap-free invariant lives on User.next_invoice_number,
+    this column just memoizes the per-quote claim.
+
+    Concurrency: the increment is a single UPDATE statement, so there is no
+    read-then-write window where two requests could both observe the same
+    next_invoice_number. SQLite serializes writes per-database via file
+    lock, so two simultaneous claims queue rather than collide. The pattern
+    is also race-safe on Postgres (UPDATE acquires a row lock for the txn).
+
+    Failure semantics: this commits before generate_document runs. If PDF
+    rendering then fails, the claim is *kept* (the next claim will get
+    n+2). We optimize for "never reuse a number" over "no gaps from failed
+    renders" — gaps are auditable as render failures; reuse is fraud.
+    """
+    if quote.invoice_number is not None:
+        return quote.invoice_number
+
+    # Atomic post-increment. We bump first, then read back the new value;
+    # claimed = new_next - 1 is the value that was current before the bump.
+    # Doing it in this order means we never need a SELECT...FOR UPDATE
+    # equivalent (which SQLite doesn't have) — the UPDATE itself is the
+    # serialization point.
+    db.session.execute(
+        text("UPDATE users SET next_invoice_number = next_invoice_number + 1 "
+             "WHERE id = :uid"),
+        {"uid": quote.user_id},
+    )
+    new_next = db.session.execute(
+        text("SELECT next_invoice_number FROM users WHERE id = :uid"),
+        {"uid": quote.user_id},
+    ).scalar()
+    claimed = new_next - 1
+
+    quote.invoice_number = claimed
+    db.session.commit()
+    return claimed
 
 
 # ---------- Internal benchmark (Heresy #9 — informational only) ----------
@@ -759,6 +814,13 @@ def quote_render_pdf(quote_id):
     filename = f"{doc_type.lower()}_{uuid.uuid4().hex[:6]}.pdf"
     output_path = os.path.join(project_root, filename)
 
+    # Sequential number for INVOICE only (Feature 2). QUOTE keeps the
+    # opaque hash from derive_doc_code — quotes aren't legally binding,
+    # so we don't burn a number on them, and the hash avoids leaking the
+    # user's quote count. The claim is idempotent: re-rendering the same
+    # quote-as-invoice always shows the same INV-NNNNNN.
+    invoice_num = _claim_invoice_number(q) if doc_type == "INVOICE" else None
+
     try:
         generate_document(
             snapshot,
@@ -768,6 +830,7 @@ def quote_render_pdf(quote_id):
             phone_number=current_user.phone_number,
             label=q.label,
             doc_code=derive_doc_code(q.id),
+            invoice_number=invoice_num,
             quote_footer=render_footer_template(
                 current_user.quote_footer_text, "QUOTE", current_user.phone_number,
             ),

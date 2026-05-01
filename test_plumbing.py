@@ -42,7 +42,26 @@ def run_test_suite():
     generate_document(invoice_snapshot, doc_type="INVOICE", output_path="invoice.pdf")
     print("OK: invoice.pdf generated.")
 
-    print("\nAll tests passed. Check quote.pdf and invoice.pdf for output.")
+    # Feature 2 smoke: invoice_number kwarg path. We're not asserting PDF
+    # content here (consistent with the rest of this suite), just proving
+    # the new param flows through generate_document without crashing. The
+    # title-format branch lives in generator.py:118-124; visual confirmation
+    # comes from inspecting invoice_numbered.pdf — should read "INV-000042".
+    print("\nGenerating invoice_numbered.pdf with invoice_number=42...")
+    generate_document(invoice_snapshot, doc_type="INVOICE",
+                      output_path="invoice_numbered.pdf", invoice_number=42)
+    print("OK: invoice_numbered.pdf generated (visual check: INV-000042).")
+
+    # Re-render with the same number to confirm idempotency at the generator
+    # level (the *real* idempotency lives in app.py:_claim_invoice_number,
+    # but the generator must accept a repeated number cleanly).
+    print("Re-generating with the same invoice_number=42...")
+    generate_document(invoice_snapshot, doc_type="INVOICE",
+                      output_path="invoice_numbered_2.pdf", invoice_number=42)
+    print("OK: re-render produced a file (same INV-000042).")
+
+    print("\nAll tests passed. Check quote.pdf, invoice.pdf, and "
+          "invoice_numbered*.pdf for output.")
 
 if __name__ == "__main__":
     run_test_suite()

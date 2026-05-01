@@ -71,6 +71,34 @@
             </div>
 
             <div>
+                <h2 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Invoice Numbering</h2>
+                <p class="text-xs text-slate-500 mb-3">
+                    Sequential numbers are assigned automatically the first time you render a quote as an invoice.
+                    The prefix below appears immediately before the number on the PDF and in your history.
+                    <br><br>
+                    <strong>Allowed:</strong> letters, numbers, space, and <span class="mono bg-slate-100 px-1 rounded">&amp; . -</span>
+                    (max {{ invoice_prefix_input_max }} characters). A trailing dash is auto-added if your prefix ends in a letter or number.
+                    Leave blank for bare numbers like <span class="mono">000042</span>.
+                    <br><br>
+                    <strong>Important:</strong> changing the prefix only affects future invoices. Already-issued invoices keep their original prefix forever — re-rendering an old invoice always shows the identifier it was issued under.
+                </p>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Invoice Prefix</label>
+                    <input type="text" name="invoice_prefix" value="{{ current_user.invoice_prefix or '' }}"
+                           maxlength="{{ invoice_prefix_input_max }}"
+                           placeholder="{{ invoice_prefix_default }}"
+                           class="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none mono">
+                    <p class="text-xs text-slate-400 italic mt-1">
+                        Default: <span class="mono">{{ invoice_prefix_default }}</span>
+                        &middot; Next invoice will read:
+                        <span class="mono">{{ current_user.invoice_prefix }}{{ "%06d"|format(current_user.next_invoice_number) }}</span>
+                        {# Live preview reflects the saved prefix, not the field's current contents.
+                           Updates after save+redirect — kept static to avoid a JS dependency. #}
+                    </p>
+                </div>
+            </div>
+
+            <div>
                 <h2 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">Account</h2>
                 <div class="text-sm text-slate-600">
                     <div><span class="font-medium">Email:</span> {{ current_user.email }}</div>

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import uuid
@@ -24,6 +25,7 @@ from engine import calculate_quote
 from generator import (
     generate_document, derive_doc_code,
     DEFAULT_QUOTE_FOOTER, DEFAULT_INVOICE_FOOTER, DEFAULT_PHONE_NUMBER,
+    INVOICE_PREFIX_DEFAULT, INVOICE_PREFIX_MAX,
 )
 from models import db, User, Transaction, PricingProfile, Quote
 
@@ -74,6 +76,9 @@ with app.app_context():
         # Per-user sequential invoice counter (Feature 2). Default 1 so the
         # first claim returns 1 and post-increment leaves 2 for next time.
         ("next_invoice_number", "INTEGER NOT NULL DEFAULT 1"),
+        # Per-user invoice prefix (Feature 3). DEFAULT 'INV-' preserves the
+        # original Feature 2 hardcoded behavior for users who never customize.
+        ("invoice_prefix", "TEXT NOT NULL DEFAULT 'INV-'"),
     ])
     _ensure_table_columns("quotes", [
         ("customer_name", "TEXT"),
@@ -85,6 +90,11 @@ with app.app_context():
         # changed — the gap-free monotonic invariant lives in the User
         # counter, this column just memoizes the claim per Quote.
         ("invoice_number", "INTEGER"),
+        # Snapshot of User.invoice_prefix at claim time (Feature 3).
+        # Nullable: null for non-invoiced quotes and pre-Feature-3 invoices
+        # (those fall back to "INV-" via the generator default — see
+        # generator.generate_document). Once set, never changes.
+        ("invoice_prefix", "TEXT"),
     ])
 
 
@@ -178,6 +188,14 @@ CUSTOMER_NAME_MAX = 100
 CUSTOMER_ADDR_MAX = 200
 CUSTOMER_EMAIL_MAX = 254  # RFC 5321 max length
 CUSTOMER_PHONE_MAX = 30
+# Invoice prefix raw-input cap (Feature 3). One char less than the
+# stored INVOICE_PREFIX_MAX (=12) so sanitize_invoice_prefix can
+# auto-append a "-" without exceeding the column-level cap.
+INVOICE_PREFIX_INPUT_MAX = INVOICE_PREFIX_MAX - 1
+# Allowed chars: letters, digits, space, ampersand, period, dash. The
+# {0,11} cap matches INVOICE_PREFIX_INPUT_MAX. Empty is intentionally
+# allowed — user spec'd "0 chars OK" for naked-number rendering.
+_INVOICE_PREFIX_RE = re.compile(r"^[A-Za-z0-9 &.\-]{0," + str(INVOICE_PREFIX_INPUT_MAX) + r"}$")
 
 
 def _sanitize_storage(raw, max_len):
@@ -199,6 +217,39 @@ def sanitize_label(raw):
 
 def sanitize_footer(raw):
     return _sanitize_storage(raw, FOOTER_MAX_LEN)
+
+
+def sanitize_invoice_prefix(raw):
+    """
+    Validate + normalize a user-supplied invoice prefix (Feature 3).
+
+    Returns the normalized prefix on success, or None on validation
+    failure (caller should flash an error and abort the save). Empty
+    string is a valid input — user spec'd "0 chars OK" for callers who
+    want bare numeric IDs like "000042".
+
+    Pipeline:
+      1. Trim leading/trailing whitespace from raw input.
+      2. Reject anything outside [A-Za-z0-9 &.-] or longer than
+         INVOICE_PREFIX_INPUT_MAX (currently 11).
+      3. If non-empty AND last char is alphanumeric, auto-append "-" so
+         the number doesn't smush into the prefix. The 11-char input cap
+         leaves exactly the 1 char of headroom this auto-append needs,
+         keeping the final stored value <= INVOICE_PREFIX_MAX (=12).
+
+    Auto-append rule rationale: typing "ACME" should produce "ACME-000042",
+    not "ACME000042". But typing "ACME-" or "Q3.2026 " or "ACME&CO " (all
+    already ending in a separator-ish char) leaves the prefix alone — we
+    only add the dash when the last char is alphanumeric.
+    """
+    if raw is None:
+        return None
+    trimmed = raw.strip()
+    if not _INVOICE_PREFIX_RE.match(trimmed):
+        return None
+    if trimmed and trimmed[-1].isalnum():
+        trimmed = trimmed + "-"
+    return trimmed
 
 
 def render_footer_template(template, doc_type, phone_number):
@@ -286,23 +337,36 @@ def _claim_invoice_number(quote):
     if quote.invoice_number is not None:
         return quote.invoice_number
 
-    # Atomic post-increment. We bump first, then read back the new value;
-    # claimed = new_next - 1 is the value that was current before the bump.
-    # Doing it in this order means we never need a SELECT...FOR UPDATE
-    # equivalent (which SQLite doesn't have) — the UPDATE itself is the
-    # serialization point.
+    # Atomic post-increment + prefix snapshot. We bump first, then read
+    # back the new counter alongside the user's current invoice_prefix in
+    # one SELECT — both pieces of identifying info land on the Quote row
+    # in the same commit. Doing the bump first means we never need a
+    # SELECT...FOR UPDATE equivalent (which SQLite doesn't have) — the
+    # UPDATE itself is the serialization point.
+    #
+    # Prefix snapshot (Feature 3) is what makes invoice IDs stable across
+    # later prefix changes: a user who issues INV-000005 and then changes
+    # their setting to ACME- will see new invoices come out ACME-000006,
+    # but re-renders of the original still read INV-000005 because that
+    # value is frozen on the Quote row.
     db.session.execute(
         text("UPDATE users SET next_invoice_number = next_invoice_number + 1 "
              "WHERE id = :uid"),
         {"uid": quote.user_id},
     )
-    new_next = db.session.execute(
-        text("SELECT next_invoice_number FROM users WHERE id = :uid"),
+    row = db.session.execute(
+        text("SELECT next_invoice_number, invoice_prefix FROM users "
+             "WHERE id = :uid"),
         {"uid": quote.user_id},
-    ).scalar()
-    claimed = new_next - 1
+    ).first()
+    claimed = row[0] - 1
+    # Belt-and-suspenders fallback: column is NOT NULL DEFAULT 'INV-' so
+    # this should never be None in practice, but if a row somehow predates
+    # the migration we still get a sane prefix instead of a crash.
+    prefix = row[1] if row[1] is not None else INVOICE_PREFIX_DEFAULT
 
     quote.invoice_number = claimed
+    quote.invoice_prefix = prefix
     db.session.commit()
     return claimed
 
@@ -831,6 +895,11 @@ def quote_render_pdf(quote_id):
             label=q.label,
             doc_code=derive_doc_code(q.id),
             invoice_number=invoice_num,
+            # Snapshotted prefix from claim time (Feature 3). For QUOTE
+            # renders this is None and the generator ignores it. For
+            # legacy invoices issued before Feature 3, q.invoice_prefix
+            # is null and the generator falls back to INVOICE_PREFIX_DEFAULT.
+            invoice_prefix=q.invoice_prefix,
             quote_footer=render_footer_template(
                 current_user.quote_footer_text, "QUOTE", current_user.phone_number,
             ),
@@ -1027,6 +1096,22 @@ def stripe_webhook():
 @login_required
 def account():
     if request.method == "POST":
+        # Validate the invoice prefix BEFORE touching anything else: if
+        # it's malformed we abort the whole save so the user doesn't get
+        # a half-applied update where some fields landed and the prefix
+        # silently rejected. Empty string is valid (renders bare numbers);
+        # only invalid characters or over-length input return None here.
+        prefix_raw = request.form.get("invoice_prefix", "")
+        sanitized_prefix = sanitize_invoice_prefix(prefix_raw)
+        if sanitized_prefix is None:
+            flash(
+                "Invoice prefix invalid: only letters, numbers, space, "
+                "and & . - allowed (max " + str(INVOICE_PREFIX_INPUT_MAX)
+                + " chars). Other settings were not saved.",
+                "error",
+            )
+            return redirect(url_for("account"))
+
         user = db.session.get(User, current_user.id)
         business_name = (request.form.get("business_name") or "").strip()
         phone_number = (request.form.get("phone_number") or "").strip()
@@ -1038,6 +1123,12 @@ def account():
         # defaults instead of rendering a blank footer.
         user.quote_footer_text = quote_footer or None
         user.invoice_footer_text = invoice_footer or None
+        # Invoice prefix: store the sanitized value as-is (including empty
+        # string for bare-number rendering). Column is NOT NULL so we
+        # cannot store None — the empty-string case is the user's explicit
+        # opt-in to "no prefix". Stable across re-renders of past invoices
+        # because Quote.invoice_prefix is snapshotted at claim time.
+        user.invoice_prefix = sanitized_prefix
         db.session.commit()
         flash("Account details saved.", "success")
         return redirect(url_for("account"))
@@ -1045,6 +1136,8 @@ def account():
         "account.html",
         default_quote_footer=DEFAULT_QUOTE_FOOTER,
         default_invoice_footer=DEFAULT_INVOICE_FOOTER,
+        invoice_prefix_default=INVOICE_PREFIX_DEFAULT,
+        invoice_prefix_input_max=INVOICE_PREFIX_INPUT_MAX,
     )
 
 

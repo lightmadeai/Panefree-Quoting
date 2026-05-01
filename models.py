@@ -28,6 +28,13 @@ class User(UserMixin, db.Model):
     # never decreases (gap = audit red flag). No rollover at any width: the
     # display pad in generator.py is min-width, not max-width.
     next_invoice_number = db.Column(db.Integer, nullable=False, default=1)
+    # Per-user prefix on the rendered invoice ID (Feature 3). Default
+    # "INV-" preserves the original hardcoded behavior for users who
+    # never customize. Snapshotted onto Quote.invoice_prefix at claim
+    # time so later changes don't retroactively rename existing invoices
+    # — legal-identifier stability matters more than display consistency
+    # across a prefix change. Validation lives in app.sanitize_invoice_prefix.
+    invoice_prefix = db.Column(db.Text, nullable=False, default="INV-")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     transactions = db.relationship("Transaction", backref="user", lazy=True)
@@ -85,6 +92,14 @@ class Quote(db.Model):
     # number). Format on PDF: "INV-000001" (zero-padded to 6 digits, but
     # the column itself has no width cap; integer can grow indefinitely).
     invoice_number = db.Column(db.Integer, nullable=True)
+    # Snapshot of User.invoice_prefix at the moment invoice_number was
+    # claimed (Feature 3). Null for: (a) quotes never converted to invoices,
+    # (b) invoices issued before Feature 3 shipped — those fall back to
+    # "INV-" via the generator's default. Once non-null, never changes:
+    # re-renders of the same invoice always show the same prefix, even if
+    # the user later changes their account setting. This is the legal
+    # invariant that makes invoice IDs stable across a prefix change.
+    invoice_prefix = db.Column(db.Text, nullable=True)
     # Full input+calculation snapshot. Decimal values are stored as strings
     # inside this JSON so rehydration is lossless (Heresy #11).
     quote_data = db.Column(db.JSON, nullable=False)

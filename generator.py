@@ -20,6 +20,14 @@ CUSTOMER_NAME_MAX = 100
 CUSTOMER_ADDR_MAX = 200
 CUSTOMER_EMAIL_MAX = 254  # RFC 5321 max length
 CUSTOMER_PHONE_MAX = 30
+# Invoice prefix (Feature 3). Stored on User.invoice_prefix and snapshotted
+# onto Quote.invoice_prefix at claim time. The generator only ever reads
+# the snapshotted value passed in via the invoice_prefix kwarg; this default
+# is the fallback for callers (legacy invoices, smoke tests) that pass None.
+# INVOICE_PREFIX_MAX is the column-level cap; the controller's input cap is
+# 1 char shorter to leave room for sanitize_invoice_prefix's auto-append.
+INVOICE_PREFIX_DEFAULT = "INV-"
+INVOICE_PREFIX_MAX = 12
 
 
 _UNICODE_REPLACEMENTS = {
@@ -89,7 +97,7 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
                       doc_code=None, quote_footer=None, invoice_footer=None,
                       customer_name=None, customer_address=None,
                       customer_email=None, customer_phone=None,
-                      invoice_number=None):
+                      invoice_number=None, invoice_prefix=None):
     """
     Generates a professional PDF based on a quote snapshot.
     This is a PURE VIEW. No calculations are performed here.
@@ -100,12 +108,21 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
     Falls back to a random UUID for ad-hoc callers without a persisted row.
 
     invoice_number: when doc_type=="INVOICE" and this is set, the title
-    renders as "INVOICE #INV-000001" (zero-padded to 6 digits) — the
+    renders as "INVOICE #{prefix}000001" (zero-padded to 6 digits) — the
     sequential, gap-free legal number claimed by the controller. Falls
     back to the doc_code hash for QUOTE renders or any caller that doesn't
     pass one (legacy / smoke tests). Generator stays a pure view: the
     claim/persistence logic lives in app.py, this just formats what it's
     given. Pad is min-width — values >999999 just render wider, no rollover.
+
+    invoice_prefix: snapshotted User.invoice_prefix from claim time, passed
+    in by the controller (Feature 3). When None — legacy invoices issued
+    before Feature 3 shipped, or callers that don't supply one — falls back
+    to INVOICE_PREFIX_DEFAULT ("INV-") so old PDFs re-render with the same
+    identifier they originally had. Defensively re-sanitized via Latin-1
+    + length cap before rendering (defense in depth, Heresy #10 pattern):
+    even if a future controller bug skipped validation, a rogue value here
+    can't crash FPDF.
 
     quote_footer / invoice_footer: pre-rendered footer strings (placeholders
     already substituted by the controller). The active doc_type picks one;
@@ -126,13 +143,21 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
     pdf.set_font("helvetica", "B", 16)
     pdf.set_text_color(0, 0, 0)
     code = doc_code or uuid.uuid4().hex[:8].upper()
-    # INVOICE with a claimed sequential number gets the legal "INV-NNNNNN"
-    # format (Feature 2). All other cases — QUOTE renders, or invoices
-    # without a claimed number (smoke tests, ad-hoc callers) — fall back
-    # to the opaque doc_code hash. The `:06d` is zero-pad-min-width: 1
-    # renders as "000001", but 1234567 renders as "1234567" (no truncation).
+    # INVOICE with a claimed sequential number gets the legal
+    # "{prefix}NNNNNN" format (Feature 2 + Feature 3). All other cases —
+    # QUOTE renders, or invoices without a claimed number (smoke tests,
+    # ad-hoc callers) — fall back to the opaque doc_code hash. The `:06d`
+    # is zero-pad-min-width: 1 renders as "000001", but 1234567 renders
+    # as "1234567" (no truncation, no rollover). The prefix is taken from
+    # invoice_prefix (snapshotted at claim time, see _claim_invoice_number);
+    # legacy invoices with no snapshot fall back to INVOICE_PREFIX_DEFAULT.
     if doc_type == "INVOICE" and invoice_number is not None:
-        doc_title = f"INVOICE #INV-{invoice_number:06d}"
+        prefix = invoice_prefix if invoice_prefix is not None else INVOICE_PREFIX_DEFAULT
+        # Defense in depth: even though the controller validates user input,
+        # re-sanitize here so a stray unicode char or excess length can't
+        # crash FPDF mid-render (Heresy #10 second layer).
+        prefix = _sanitize_text(prefix, INVOICE_PREFIX_MAX)
+        doc_title = f"INVOICE #{prefix}{invoice_number:06d}"
     else:
         doc_title = f"{doc_type} #{code}"
     pdf.cell(0, 10, doc_title, ln=True, align="R")

@@ -60,8 +60,33 @@ def run_test_suite():
                       output_path="invoice_numbered_2.pdf", invoice_number=42)
     print("OK: re-render produced a file (same INV-000042).")
 
+    # Feature 3 smoke: invoice_prefix kwarg path. Three cases — custom
+    # prefix, empty prefix (bare numbers), None prefix (legacy fallback).
+    # Same "no content assertion, just don't crash" pattern as the rest
+    # of this suite. Visual check the title field of each PDF:
+    #   - invoice_custom.pdf      -> "INVOICE #ACME-000042"
+    #   - invoice_bare.pdf        -> "INVOICE #000042"
+    #   - invoice_fallback.pdf    -> "INVOICE #INV-000042" (legacy default)
+    print("\nGenerating invoice_custom.pdf with invoice_prefix='ACME-'...")
+    generate_document(invoice_snapshot, doc_type="INVOICE",
+                      output_path="invoice_custom.pdf",
+                      invoice_number=42, invoice_prefix="ACME-")
+    print("OK: invoice_custom.pdf generated (visual check: ACME-000042).")
+
+    print("Generating invoice_bare.pdf with invoice_prefix=''...")
+    generate_document(invoice_snapshot, doc_type="INVOICE",
+                      output_path="invoice_bare.pdf",
+                      invoice_number=42, invoice_prefix="")
+    print("OK: invoice_bare.pdf generated (visual check: bare 000042).")
+
+    print("Generating invoice_fallback.pdf with invoice_prefix=None...")
+    generate_document(invoice_snapshot, doc_type="INVOICE",
+                      output_path="invoice_fallback.pdf",
+                      invoice_number=42, invoice_prefix=None)
+    print("OK: invoice_fallback.pdf generated (visual check: INV-000042).")
+
     print("\nAll tests passed. Check quote.pdf, invoice.pdf, and "
-          "invoice_numbered*.pdf for output.")
+          "invoice_*.pdf for output.")
 
 if __name__ == "__main__":
     run_test_suite()

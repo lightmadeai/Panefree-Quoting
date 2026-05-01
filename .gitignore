@@ -8,9 +8,10 @@ __pycache__/
 *.sqlite
 *.sqlite3
 
-# Generated PDFs (runtime output)
-quote_*.pdf
-invoice_*.pdf
+# Generated PDFs (runtime output from /generate, /quotes/<id>/pdf,
+# and test_plumbing.py — the test writes literal quote.pdf / invoice.pdf).
+quote*.pdf
+invoice*.pdf
 
 # Env / secrets
 .env

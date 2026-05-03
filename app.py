@@ -79,7 +79,20 @@ with app.app_context():
         # Per-user invoice prefix (Feature 3). DEFAULT 'INV-' preserves the
         # original Feature 2 hardcoded behavior for users who never customize.
         ("invoice_prefix", "TEXT NOT NULL DEFAULT 'INV-'"),
+        # Subscription columns. UNIQUE on subscription_id is created as a
+        # separate index below — SQLite's ALTER TABLE ADD COLUMN cannot
+        # apply UNIQUE in-place. All three are nullable: existing users
+        # (non-subscribers) carry NULLs and the reserve bypass treats NULL
+        # subscription_status as "no active sub, fall through to credits".
+        ("subscription_status", "TEXT"),
+        ("subscription_id", "TEXT"),
+        ("subscription_current_period_end", "DATETIME"),
     ])
+    db.session.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_subscription_id "
+        "ON users(subscription_id)"
+    ))
+    db.session.commit()
     _ensure_table_columns("quotes", [
         ("customer_name", "TEXT"),
         ("customer_address", "TEXT"),
@@ -590,22 +603,43 @@ def calculate():
 @app.route("/generate", methods=["POST"])
 @login_required
 def generate():
-    """Reserve -> Generate -> Refund on Failure (Heresy #1 fix)."""
+    """
+    Reserve -> Generate -> Refund on Failure (Heresy #1 fix).
+    Active subscribers bypass the credit reserve entirely; past_due falls
+    through to credits as a grace mechanism. Heresy #12 fix: subscription
+    state is read off a fresh User load, never the cached current_user.
+    """
     data = request.get_json(silent=True) or _parse_quote_form()
     registry, _ = get_user_profile_registry(current_user, preferred_name=data.get("profile_id"))
     if not data.get("profile_id"):
         data["profile_id"] = registry["active_profile"]
     registry = apply_callout_override(registry, data.get("profile_id"), data.get("callout_override"))
 
-    # Atomic reserve
-    reserved = db.session.execute(
-        text(
-            "UPDATE users SET credit_balance = credit_balance - 1 "
-            "WHERE id = :uid AND credit_balance > 0"
-        ),
-        {"uid": current_user.id},
-    ).rowcount
-    db.session.commit()
+    # Heresy #12: never trust current_user.subscription_* — go through the
+    # session. The reserve bypass keys off period_end (the timestamp Stripe
+    # owns), not on status alone, so a stale "active" status with an
+    # expired period_end correctly falls through to the credit path.
+    user = db.session.get(User, current_user.id)
+    now = datetime.utcnow()
+    is_subscriber = (
+        user.subscription_status == "active"
+        and user.subscription_current_period_end is not None
+        and user.subscription_current_period_end > now
+    )
+
+    if is_subscriber:
+        # Subscription bypass — no credit decrement, no commit needed.
+        reserved = 1
+    else:
+        # Atomic reserve (past_due subscribers reach this path too).
+        reserved = db.session.execute(
+            text(
+                "UPDATE users SET credit_balance = credit_balance - 1 "
+                "WHERE id = :uid AND credit_balance > 0"
+            ),
+            {"uid": current_user.id},
+        ).rowcount
+        db.session.commit()
 
     if reserved == 0:
         return jsonify({
@@ -672,21 +706,38 @@ def generate():
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        db.session.execute(
-            text("UPDATE users SET credit_balance = credit_balance + 1 WHERE id = :uid"),
-            {"uid": current_user.id},
-        )
-        db.session.commit()
+        if not is_subscriber:
+            # Symmetric refund. Subscribers had nothing reserved, so skip.
+            db.session.execute(
+                text("UPDATE users SET credit_balance = credit_balance + 1 WHERE id = :uid"),
+                {"uid": current_user.id},
+            )
+            db.session.commit()
         return jsonify({"status": "error", "message": str(e)}), 400
 
-    return jsonify({
+    response = {
         "status": "success",
         "file": filename,
         "download_url": url_for("download", filename=filename),
         "credits_remaining": current_user.credit_balance,
         "quote_id": quote.id,
         "invoice_url": url_for("quote_render_pdf", quote_id=quote.id, type="INVOICE"),
-    })
+    }
+
+    if is_subscriber:
+        # Soft-cap notice: informational only, does not block. period_start
+        # is approximated as period_end - 365d since we don't store it
+        # separately (annual sub — drift of leap seconds is irrelevant for
+        # an informational threshold). Counts the just-created quote.
+        period_start = user.subscription_current_period_end - timedelta(days=365)
+        quote_count = Quote.query.filter(
+            Quote.user_id == user.id,
+            Quote.created_at >= period_start,
+        ).count()
+        if quote_count > config.SOFT_CAP_THRESHOLD:
+            response["soft_cap_notice"] = True
+
+    return jsonify(response)
 
 
 @app.route("/download/<filename>")
@@ -999,6 +1050,38 @@ def checkout():
         return jsonify({"status": "error", "message": "Stripe is not configured on this server."}), 503
 
     pack_id = request.form.get("pack") or request.json.get("pack")
+
+    if pack_id == "annual":
+        annual = config.ANNUAL_SUBSCRIPTION
+        try:
+            session = stripe.checkout.Session.create(
+                mode="subscription",
+                payment_method_types=["card"],
+                client_reference_id=str(current_user.id),
+                metadata={"user_id": str(current_user.id), "product": "annual"},
+                # subscription_data.metadata is what the later
+                # customer.subscription.* and invoice.* events carry.
+                # Top-level checkout metadata does NOT propagate to those
+                # objects, so duplicate the user_id here for race recovery.
+                subscription_data={
+                    "metadata": {"user_id": str(current_user.id), "product": "annual"},
+                },
+                line_items=[{
+                    "quantity": 1,
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": annual["price_cents"],
+                        "recurring": {"interval": annual["interval"]},
+                        "product_data": {"name": annual["name"]},
+                    },
+                }],
+                success_url=f"{config.APP_BASE_URL}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}",
+                cancel_url=f"{config.APP_BASE_URL}/top-up",
+            )
+            return redirect(session.url, code=303)
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+
     pack = config.CREDIT_PACKS.get(pack_id)
     if not pack:
         return jsonify({"status": "error", "message": "Unknown credit pack."}), 400
@@ -1032,27 +1115,39 @@ def checkout_success():
     return redirect(url_for("index"))
 
 
-@app.route("/webhook/stripe", methods=["POST"])
-def stripe_webhook():
+@app.route("/account/billing-portal", methods=["POST"])
+@login_required
+def billing_portal():
     """
-    Signature-verified, idempotent credit grant.
-    Heresy candidate: double-credit on replay — blocked by UNIQUE(stripe_tx_id).
+    Hands the subscriber off to Stripe's hosted Billing Portal — payment
+    method updates, cancel-at-period-end, and invoice history live there
+    rather than being reimplemented locally. Customer ID is resolved by
+    fetching the subscription (we don't store it as its own column).
     """
-    payload = request.get_data()
-    sig_header = request.headers.get("Stripe-Signature", "")
-
-    if not config.STRIPE_WEBHOOK_SECRET:
-        return jsonify({"status": "error", "message": "Webhook secret not configured."}), 503
-
+    if not config.STRIPE_SECRET_KEY:
+        flash("Stripe is not configured on this server.", "error")
+        return redirect(url_for("account"))
+    user = db.session.get(User, current_user.id)
+    if not user.subscription_id:
+        flash("No active subscription on file.", "error")
+        return redirect(url_for("account"))
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, config.STRIPE_WEBHOOK_SECRET)
-    except (ValueError, stripe.error.SignatureVerificationError) as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
+        sub = stripe.Subscription.retrieve(user.subscription_id)
+        portal = stripe.billing_portal.Session.create(
+            customer=sub["customer"],
+            return_url=f"{config.APP_BASE_URL}/account",
+        )
+        return redirect(portal.url, code=303)
+    except Exception as e:
+        flash(f"Could not open billing portal: {e}", "error")
+        return redirect(url_for("account"))
 
-    if event["type"] != "checkout.session.completed":
-        return jsonify({"status": "ignored", "type": event["type"]}), 200
 
-    session_obj = event["data"]["object"]
+def _handle_payment_checkout(session_obj):
+    """
+    Credit-pack checkout completed. Inserts a Transaction row and bumps
+    credit_balance. Idempotent via UNIQUE(stripe_tx_id) on Transaction.
+    """
     session_id = session_obj["id"]
     user_id = session_obj.get("client_reference_id") or (session_obj.get("metadata") or {}).get("user_id")
     credits_str = (session_obj.get("metadata") or {}).get("credits", "0")
@@ -1068,7 +1163,6 @@ def stripe_webhook():
     if not user:
         return jsonify({"status": "error", "message": "Unknown user."}), 404
 
-    # Atomic credit + transaction insert guarded by UNIQUE(stripe_tx_id).
     tx = Transaction(
         user_id=user.id,
         amount=Decimal(amount_total) / Decimal(100),
@@ -1088,6 +1182,214 @@ def stripe_webhook():
         return jsonify({"status": "ok", "duplicate": True}), 200
 
     return jsonify({"status": "ok", "credits_added": credits}), 200
+
+
+def _resolve_user_from_subscription(sub_id):
+    """
+    Look up the User linked to a Stripe subscription. Falls back to the
+    subscription's metadata.user_id if subscription_id isn't yet stored
+    on a User row — this heals races where invoice.payment_succeeded
+    arrives before checkout.session.completed has bound the sub to the
+    user. When the metadata path resolves the user, we also write
+    subscription_id back so subsequent events take the fast path.
+    """
+    user = User.query.filter_by(subscription_id=sub_id).first()
+    if user:
+        return user
+    try:
+        sub = stripe.Subscription.retrieve(sub_id)
+    except Exception:
+        return None
+    user_id = (sub.get("metadata") or {}).get("user_id")
+    if not user_id:
+        return None
+    try:
+        user = db.session.get(User, int(user_id))
+    except (TypeError, ValueError):
+        return None
+    if user and not user.subscription_id:
+        # Self-heal the link so subsequent events resolve via the index.
+        user.subscription_id = sub_id
+    return user
+
+
+def _handle_subscription_checkout(session_obj):
+    """
+    Subscription checkout completed. Marks the user active, records the
+    Stripe subscription ID, and stores current_period_end (fetched from
+    Stripe — the checkout session payload doesn't include it). The first
+    invoice.payment_succeeded fires separately and records the Transaction.
+    """
+    user_id = session_obj.get("client_reference_id") or (session_obj.get("metadata") or {}).get("user_id")
+    sub_id = session_obj.get("subscription")
+    if not user_id or not sub_id:
+        return jsonify({"status": "error", "message": "Missing user_id or subscription on session."}), 400
+    try:
+        user_id_int = int(user_id)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Bad user_id metadata."}), 400
+    user = db.session.get(User, user_id_int)
+    if not user:
+        return jsonify({"status": "error", "message": "Unknown user."}), 404
+
+    try:
+        sub = stripe.Subscription.retrieve(sub_id)
+    except Exception as e:
+        # Stripe API hiccup — return 5xx so Stripe retries. We must have
+        # period_end before flipping status to active, otherwise the
+        # reserve bypass (period_end > utcnow) would silently fail open.
+        return jsonify({"status": "error", "message": f"Subscription fetch failed: {e}"}), 503
+
+    period_end = datetime.utcfromtimestamp(sub["current_period_end"])
+    user.subscription_status = "active"
+    user.subscription_id = sub_id
+    user.subscription_current_period_end = period_end
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Another User already linked to this subscription_id — should not
+        # happen in normal flow, but UNIQUE catches it. Ack to stop retries.
+        db.session.rollback()
+        return jsonify({"status": "ok", "duplicate": True}), 200
+    return jsonify({"status": "ok", "subscription": "active"}), 200
+
+
+def _handle_subscription_updated(sub):
+    """
+    Subscription state transitions. Idempotent — same event delivered N
+    times produces the same final row state. Cancel-at-period-end manifests
+    here as status="active" with cancel_at_period_end=True; the eventual
+    sub.deleted event flips status to canceled when the period elapses.
+    """
+    user = User.query.filter_by(subscription_id=sub["id"]).first()
+    if not user:
+        return jsonify({"status": "ignored", "reason": "no matching user"}), 200
+
+    status = sub.get("status")
+    if status in ("active", "trialing"):
+        user.subscription_status = "active"
+    elif status in ("past_due", "unpaid"):
+        user.subscription_status = "past_due"
+    elif status == "canceled":
+        user.subscription_status = "canceled"
+    # Anything else (incomplete, incomplete_expired) leaves status unchanged —
+    # those represent failed initial setup, not transitions of an active sub.
+
+    period_end = sub.get("current_period_end")
+    if period_end:
+        user.subscription_current_period_end = datetime.utcfromtimestamp(period_end)
+    db.session.commit()
+    return jsonify({"status": "ok"}), 200
+
+
+def _handle_subscription_deleted(sub):
+    """
+    Subscription terminated. period_end is intentionally NOT touched —
+    a canceled-but-paid user keeps unlimited access through the billing
+    period they already paid for (cancel-at-period-end pattern).
+    """
+    user = User.query.filter_by(subscription_id=sub["id"]).first()
+    if not user:
+        return jsonify({"status": "ignored", "reason": "no matching user"}), 200
+    user.subscription_status = "canceled"
+    db.session.commit()
+    return jsonify({"status": "ok"}), 200
+
+
+def _handle_invoice_paid(invoice):
+    """
+    Subscription invoice paid (initial OR renewal). Extends period_end
+    and inserts a Transaction with the invoice ID as the dedup key —
+    Heresy #13: replayed renewal webhooks must not create duplicate
+    Transaction rows. Same UNIQUE(stripe_tx_id) guard as credit packs.
+    """
+    sub_id = invoice.get("subscription")
+    if not sub_id:
+        # One-off invoices are not tied to a subscription; ignore.
+        return jsonify({"status": "ignored", "reason": "non-subscription invoice"}), 200
+    user = _resolve_user_from_subscription(sub_id)
+    if not user:
+        return jsonify({"status": "ignored", "reason": "no matching user"}), 200
+
+    invoice_id = invoice["id"]
+    amount_paid = invoice.get("amount_paid", 0) or 0
+
+    try:
+        sub = stripe.Subscription.retrieve(sub_id)
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Subscription fetch failed: {e}"}), 503
+    new_period_end = datetime.utcfromtimestamp(sub["current_period_end"])
+
+    tx = Transaction(
+        user_id=user.id,
+        amount=Decimal(amount_paid) / Decimal(100),
+        credits_added=0,  # Subscriptions grant no credits — bypass is via period_end.
+        stripe_tx_id=invoice_id,
+    )
+    db.session.add(tx)
+    try:
+        user.subscription_status = "active"
+        user.subscription_current_period_end = new_period_end
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        # Duplicate invoice — already processed. Ack stops Stripe retries.
+        return jsonify({"status": "ok", "duplicate": True}), 200
+    return jsonify({"status": "ok", "renewed_through": new_period_end.isoformat()}), 200
+
+
+def _handle_invoice_failed(invoice):
+    """
+    Subscription invoice failed (declined card, etc.). Marks past_due —
+    the reserve bypass falls through to the credit reserve, giving users
+    a grace mechanism: they can spend credits while the dunning flow runs.
+    """
+    sub_id = invoice.get("subscription")
+    if not sub_id:
+        return jsonify({"status": "ignored", "reason": "non-subscription invoice"}), 200
+    user = User.query.filter_by(subscription_id=sub_id).first()
+    if not user:
+        return jsonify({"status": "ignored", "reason": "no matching user"}), 200
+    user.subscription_status = "past_due"
+    db.session.commit()
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/webhook/stripe", methods=["POST"])
+def stripe_webhook():
+    """
+    Signature-verified, idempotent fan-out. Handles credit-pack purchases,
+    annual subscription signups, renewals, status changes, and failures.
+    Each handler is idempotent on its own; the dispatcher just routes.
+    """
+    payload = request.get_data()
+    sig_header = request.headers.get("Stripe-Signature", "")
+
+    if not config.STRIPE_WEBHOOK_SECRET:
+        return jsonify({"status": "error", "message": "Webhook secret not configured."}), 503
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, config.STRIPE_WEBHOOK_SECRET)
+    except (ValueError, stripe.error.SignatureVerificationError) as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+    event_type = event["type"]
+    event_obj = event["data"]["object"]
+
+    if event_type == "checkout.session.completed":
+        if event_obj.get("mode") == "subscription":
+            return _handle_subscription_checkout(event_obj)
+        return _handle_payment_checkout(event_obj)
+    if event_type == "customer.subscription.updated":
+        return _handle_subscription_updated(event_obj)
+    if event_type == "customer.subscription.deleted":
+        return _handle_subscription_deleted(event_obj)
+    if event_type == "invoice.payment_succeeded":
+        return _handle_invoice_paid(event_obj)
+    if event_type == "invoice.payment_failed":
+        return _handle_invoice_failed(event_obj)
+
+    return jsonify({"status": "ignored", "type": event_type}), 200
 
 
 # ---------- Account settings (business name, phone) ----------

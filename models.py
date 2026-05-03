@@ -14,6 +14,21 @@ class User(UserMixin, db.Model):
     email = db.Column(db.Text, unique=True, nullable=False)
     password_hash = db.Column(db.Text, nullable=False)
     credit_balance = db.Column(db.Integer, nullable=False, default=5)
+    # Subscription state. NULL = no subscription history; non-NULL takes
+    # values "active", "past_due", or "canceled". The /generate reserve
+    # bypass keys off `subscription_current_period_end`, not this field
+    # alone — see Heresy #12 (lapsed-but-cached subscriber).
+    subscription_status = db.Column(db.Text, nullable=True)
+    # Stripe subscription ID. UNIQUE: blocks the double-subscribe race
+    # (same sub linked to two users) — same idempotency pattern as
+    # Transaction.stripe_tx_id. NULL for non-subscribers; SQLite's UNIQUE
+    # admits multiple NULLs by default, which is what we want.
+    subscription_id = db.Column(db.Text, nullable=True, unique=True)
+    # UTC. Sole field consulted by the reserve bypass to decide whether
+    # paid access is still active. Persists past status="canceled" so a
+    # canceled-but-paid user keeps unlimited access through their billing
+    # period (Stripe pattern: cancel-at-period-end).
+    subscription_current_period_end = db.Column(db.DateTime, nullable=True)
     business_name = db.Column(db.Text, nullable=True)
     phone_number = db.Column(db.Text, nullable=True)
     # NULL means "use sovereign default"; non-NULL is the user's customized

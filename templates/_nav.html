@@ -1,9 +1,19 @@
 <nav class="industrial-gradient text-white py-4 px-6 shadow-lg flex justify-between items-center">
     <a href="{{ url_for('index') }}" class="text-2xl font-bold tracking-tight">Panefree<span class="text-blue-400"> Quotes</span></a>
     <div class="text-sm flex items-center gap-4">
-        <span id="credit-badge" class="px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 font-semibold mono">
-            {{ current_user.credit_balance }} credits
-        </span>
+        {% if current_user.subscription_status == 'active' %}
+            <span id="credit-badge" class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold mono text-xs">
+                Unlimited · renews {{ current_user.subscription_current_period_end.strftime('%Y-%m-%d') if current_user.subscription_current_period_end else 'soon' }}
+            </span>
+        {% elif current_user.subscription_status == 'past_due' %}
+            <a href="{{ url_for('top_up') }}" id="credit-badge" class="px-3 py-1 rounded-full bg-red-500/20 text-red-300 font-semibold mono text-xs hover:bg-red-500/30">
+                Subscription past due
+            </a>
+        {% else %}
+            <span id="credit-badge" class="px-3 py-1 rounded-full bg-blue-500/20 text-blue-300 font-semibold mono">
+                {{ current_user.credit_balance }} credits
+            </span>
+        {% endif %}
         <a href="{{ url_for('index') }}" class="opacity-80 hover:opacity-100 hover:underline">Quote</a>
         <a href="{{ url_for('history') }}" class="opacity-80 hover:opacity-100 hover:underline">History</a>
         <a href="{{ url_for('profiles_list') }}" class="opacity-80 hover:opacity-100 hover:underline">Profiles</a>

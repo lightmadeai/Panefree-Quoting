@@ -36,6 +36,21 @@ CREDIT_PACKS = {
     "studio":  {"name": "Studio",   "credits": 100,  "price_cents": 7900},
 }
 
+# Annual unlimited subscription tier. Distinct shape from CREDIT_PACKS — no
+# `credits` field, has an `interval`. Intentionally a separate dict so a
+# typo in the request body can never trip the credit-pack lookup into
+# vending an annual subscription, or vice versa.
+ANNUAL_SUBSCRIPTION = {
+    "name": "Annual Unlimited",
+    "price_cents": 14900,
+    "interval": "year",
+}
+
+# Soft-cap notification threshold for annual subscribers — informational
+# only, does NOT throttle generation. Configurable via env so the threshold
+# can be tuned post-launch without a redeploy.
+SOFT_CAP_THRESHOLD = int(os.environ.get("SOFT_CAP_THRESHOLD", "500"))
+
 # Seed file — used only to populate a new user's default profiles.
 # Runtime reads come from the pricing_profiles table, never this file.
 SEED_PRICE_SHEET_PATH = os.path.join(project_root, "price_sheet.json")

@@ -3,7 +3,7 @@
     <div class="text-sm flex items-center gap-4">
         {% if current_user.subscription_status == 'active' %}
             <span id="credit-badge" class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold mono text-xs">
-                Unlimited · renews {{ current_user.subscription_current_period_end.strftime('%Y-%m-%d') if current_user.subscription_current_period_end else 'soon' }}
+                Unlimited · {% if current_user.cancel_at_period_end %}cancels{% else %}renews{% endif %} {{ current_user.subscription_current_period_end.strftime('%Y-%m-%d') if current_user.subscription_current_period_end else 'soon' }}
             </span>
         {% elif current_user.subscription_status == 'past_due' %}
             <a href="{{ url_for('top_up') }}" id="credit-badge" class="px-3 py-1 rounded-full bg-red-500/20 text-red-300 font-semibold mono text-xs hover:bg-red-500/30">

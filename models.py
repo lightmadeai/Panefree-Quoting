@@ -29,6 +29,13 @@ class User(UserMixin, db.Model):
     # canceled-but-paid user keeps unlimited access through their billing
     # period (Stripe pattern: cancel-at-period-end).
     subscription_current_period_end = db.Column(db.DateTime, nullable=True)
+    # Pending cancellation flag. True when the user has scheduled a cancel
+    # via the Stripe Billing Portal but the billing period hasn't elapsed
+    # yet — they still have unlimited access, but the UI says "Cancels on
+    # {date}" instead of "Renews on {date}". Resets to False when the sub
+    # actually terminates (sub.deleted webhook), so a future re-subscribe
+    # starts in the renewing state.
+    cancel_at_period_end = db.Column(db.Boolean, nullable=False, default=False)
     business_name = db.Column(db.Text, nullable=True)
     phone_number = db.Column(db.Text, nullable=True)
     # NULL means "use sovereign default"; non-NULL is the user's customized

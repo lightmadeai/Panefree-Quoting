@@ -116,7 +116,11 @@
                     </div>
                     {% if current_user.subscription_current_period_end %}
                     <div>
-                        <span class="font-medium">Current period ends:</span>
+                        {% if current_user.cancel_at_period_end %}
+                            <span class="font-medium">Cancels on:</span>
+                        {% else %}
+                            <span class="font-medium">Renews on:</span>
+                        {% endif %}
                         <span class="mono">{{ current_user.subscription_current_period_end.strftime('%Y-%m-%d') }}</span>
                     </div>
                     {% endif %}

@@ -28,6 +28,7 @@ from generator import (
     INVOICE_PREFIX_DEFAULT, INVOICE_PREFIX_MAX,
 )
 from models import db, User, Transaction, PricingProfile, Quote
+from notices import build_soft_cap_notice
 
 app = Flask(__name__)
 app.config.from_object(config)
@@ -87,6 +88,11 @@ with app.app_context():
         ("subscription_status", "TEXT"),
         ("subscription_id", "TEXT"),
         ("subscription_current_period_end", "DATETIME"),
+        # Pending cancellation flag. NOT NULL with a default so existing
+        # rows backfill cleanly to False; SQLite accepts BOOLEAN as an
+        # INTEGER alias and stores 0/1 — Python sees True/False via
+        # SQLAlchemy's Boolean type.
+        ("cancel_at_period_end", "BOOLEAN NOT NULL DEFAULT 0"),
     ])
     db.session.execute(text(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_subscription_id "
@@ -734,8 +740,11 @@ def generate():
             Quote.user_id == user.id,
             Quote.created_at >= period_start,
         ).count()
-        if quote_count > config.SOFT_CAP_THRESHOLD:
-            response["soft_cap_notice"] = True
+        notice = build_soft_cap_notice(
+            quote_count, config.SOFT_CAP_THRESHOLD, config.SUPPORT_EMAIL,
+        )
+        if notice:
+            response["soft_cap_notice"] = notice
 
     return jsonify(response)
 
@@ -994,6 +1003,8 @@ def top_up():
     return render_template(
         "top_up.html",
         credit_packs=config.CREDIT_PACKS,
+        annual=config.ANNUAL_SUBSCRIPTION,
+        soft_cap=config.SOFT_CAP_THRESHOLD,
         publishable_key=config.STRIPE_PUBLISHABLE_KEY,
         simulator_active=simulator_active,
     )
@@ -1257,9 +1268,11 @@ def _handle_subscription_checkout(session_obj):
 def _handle_subscription_updated(sub):
     """
     Subscription state transitions. Idempotent — same event delivered N
-    times produces the same final row state. Cancel-at-period-end manifests
-    here as status="active" with cancel_at_period_end=True; the eventual
-    sub.deleted event flips status to canceled when the period elapses.
+    times produces the same final row state. Cancel-at-period-end is
+    surfaced through the cancel_at_period_end flag: status stays "active",
+    the user keeps unlimited access through period_end, but the UI swaps
+    "Renews on" for "Cancels on". The eventual sub.deleted event flips
+    status to "canceled" and clears the flag when the period elapses.
     """
     user = User.query.filter_by(subscription_id=sub["id"]).first()
     if not user:
@@ -1275,6 +1288,12 @@ def _handle_subscription_updated(sub):
     # Anything else (incomplete, incomplete_expired) leaves status unchanged —
     # those represent failed initial setup, not transitions of an active sub.
 
+    # Track the pending-cancel signal. Stripe sends `cancel_at_period_end`
+    # as a Boolean on every sub.updated; a user can also undo a scheduled
+    # cancel via the Billing Portal, which arrives as the same event with
+    # the flag flipped back to False — so we mirror it unconditionally.
+    user.cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
+
     period_end = sub.get("current_period_end")
     if period_end:
         user.subscription_current_period_end = datetime.utcfromtimestamp(period_end)
@@ -1286,12 +1305,15 @@ def _handle_subscription_deleted(sub):
     """
     Subscription terminated. period_end is intentionally NOT touched —
     a canceled-but-paid user keeps unlimited access through the billing
-    period they already paid for (cancel-at-period-end pattern).
+    period they already paid for (cancel-at-period-end pattern). The
+    cancel_at_period_end flag resets to False here so a future re-subscribe
+    starts cleanly in the renewing state.
     """
     user = User.query.filter_by(subscription_id=sub["id"]).first()
     if not user:
         return jsonify({"status": "ignored", "reason": "no matching user"}), 200
     user.subscription_status = "canceled"
+    user.cancel_at_period_end = False
     db.session.commit()
     return jsonify({"status": "ok"}), 200
 

@@ -47,46 +47,25 @@
             </form>
         </div>
         {% else %}
-        <div class="bg-gradient-to-br from-emerald-50 to-emerald-100 border-2 border-emerald-300 rounded-xl p-6 mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div class="flex-1">
-                <div class="inline-block text-xs text-white bg-emerald-600 font-bold uppercase tracking-wider px-2 py-1 rounded mb-2">Best Value</div>
-                <h2 class="text-2xl font-bold text-emerald-900">Annual Unlimited</h2>
-                <p class="text-emerald-700 mt-1 text-sm">Unlimited quotes for a flat annual price. Auto-renews each year — cancel anytime.</p>
-            </div>
-            <div class="text-left md:text-right">
-                <div><span class="text-4xl font-bold mono text-emerald-900">$149</span><span class="text-emerald-700">/yr</span></div>
-                {% if simulator_active %}
-                <button type="button" disabled class="mt-2 bg-slate-300 text-slate-500 font-semibold py-2 px-5 rounded-lg cursor-not-allowed" title="Simulator does not cover subscriptions — set real Stripe keys to enable.">
-                    Subscribe (sim N/A)
-                </button>
-                {% elif publishable_key %}
-                <form method="POST" action="{{ url_for('checkout') }}" class="mt-2">
-                    <input type="hidden" name="pack" value="annual">
-                    <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2 px-5 rounded-lg shadow-md transition-all">
-                        Subscribe
-                    </button>
-                </form>
-                {% else %}
-                <button type="button" disabled class="mt-2 bg-slate-300 text-slate-500 font-semibold py-2 px-5 rounded-lg cursor-not-allowed">
-                    Not configured
-                </button>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        {# 4-tier grid: Starter / Pro / Studio / Annual. Mobile stacks (1 col),
+           tablet 2x2, desktop 4 across. Per-credit cost and discount-vs-Starter
+           shown on each card; Pro carries "Most Popular", Annual "Best Value". #}
+        {% set starter_per_credit = (credit_packs.starter.price_cents / 100.0 / credit_packs.starter.credits) %}
+        {% set is_past_due = current_user.subscription_status == 'past_due' %}
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             {% for pack_id, pack in credit_packs.items() %}
             {% set per_credit = (pack.price_cents / 100.0 / pack.credits) %}
+            {% set discount_pct = ((1 - per_credit / starter_per_credit) * 100) | round | int %}
             <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col {% if pack_id == 'pro' %}ring-2 ring-blue-500{% endif %}">
-                {% if pack_id == 'pro' %}
-                <div class="text-xs text-blue-600 font-bold uppercase tracking-wider mb-2">Most Popular</div>
-                {% endif %}
+                {# Fixed-height badge slot keeps card tops aligned across the grid. #}
+                <div class="text-xs font-bold uppercase tracking-wider mb-2 h-4">
+                    {% if pack_id == 'pro' %}<span class="text-blue-600">Most Popular</span>{% endif %}
+                </div>
                 <h3 class="text-xl font-bold">{{ pack.name }}</h3>
                 <div class="mt-4">
-                    {# Render integer dollar amounts as bare ($49) and non-integer
-                       amounts with two decimals ($9.99). The previous "%.0f"
-                       silently rounded $9.99 to $10, hiding the psychological
-                       pricing that the .99 endings are explicitly designed for. #}
+                    {# Integer dollar amounts render bare ($49); non-integer keep
+                       two decimals ($8.99) — psychological-pricing endings stay
+                       visible. #}
                     {% set dollars = pack.price_cents / 100.0 %}
                     <span class="text-4xl font-bold mono">${{ "%.2f"|format(dollars)|replace(".00", "") }}</span>
                 </div>
@@ -94,6 +73,9 @@
                     <span class="font-semibold">{{ pack.credits }}</span> PDF credits
                 </div>
                 <div class="text-xs text-slate-400 italic mt-1">${{ "%.2f"|format(per_credit) }} per quote</div>
+                <div class="text-xs font-semibold mt-1 h-4">
+                    {% if pack_id != 'starter' %}<span class="text-emerald-600">{{ discount_pct }}% off Starter</span>{% endif %}
+                </div>
 
                 {% if simulator_active %}
                 <form method="POST" action="{{ url_for('dev_grant_credits') }}" class="mt-auto pt-6">
@@ -106,7 +88,7 @@
                 <form method="POST" action="{{ url_for('checkout') }}" class="mt-auto pt-6">
                     <input type="hidden" name="pack" value="{{ pack_id }}">
                     <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg shadow-md transition-all">
-                        Buy {{ pack.name }}
+                        Buy Credits
                     </button>
                 </form>
                 {% else %}
@@ -118,6 +100,48 @@
                 {% endif %}
             </div>
             {% endfor %}
+
+            {# Annual Unlimited — fourth tier. Past-due subscribers see this
+               card highlighted as their current plan with a recovery CTA. #}
+            <div class="bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-xl shadow-sm p-6 flex flex-col border-2 {% if is_past_due %}border-orange-400 ring-2 ring-orange-300{% else %}border-emerald-300{% endif %}">
+                <div class="text-xs font-bold uppercase tracking-wider mb-2 h-4">
+                    {% if is_past_due %}
+                        <span class="text-orange-700">Your plan — past due</span>
+                    {% else %}
+                        <span class="text-white bg-emerald-600 px-2 py-0.5 rounded">Best Value</span>
+                    {% endif %}
+                </div>
+                <h3 class="text-xl font-bold text-emerald-900">{{ annual.name }}</h3>
+                <div class="mt-4">
+                    <span class="text-4xl font-bold mono text-emerald-900">${{ annual.price_cents // 100 }}</span><span class="text-emerald-700">/yr</span>
+                </div>
+                <div class="mt-2 text-emerald-800">
+                    <span class="font-semibold">Unlimited</span> quotes
+                </div>
+                <div class="text-xs text-emerald-700 italic mt-1">Soft cap: {{ "{:,}".format(soft_cap) }} / year</div>
+                <div class="text-xs text-emerald-700 font-semibold mt-1 h-4">97%+ off Starter</div>
+
+                {% if simulator_active %}
+                <div class="mt-auto pt-6">
+                    <button type="button" disabled class="w-full bg-slate-300 text-slate-500 font-semibold py-3 rounded-lg cursor-not-allowed" title="Simulator does not cover subscriptions — set real Stripe keys to enable.">
+                        Subscribe (sim N/A)
+                    </button>
+                </div>
+                {% elif publishable_key %}
+                <form method="POST" action="{{ url_for('checkout') }}" class="mt-auto pt-6">
+                    <input type="hidden" name="pack" value="annual">
+                    <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 rounded-lg shadow-md transition-all">
+                        {% if is_past_due %}Reactivate{% else %}Subscribe{% endif %}
+                    </button>
+                </form>
+                {% else %}
+                <div class="mt-auto pt-6">
+                    <button type="button" disabled class="w-full bg-slate-300 text-slate-500 font-semibold py-3 rounded-lg cursor-not-allowed">
+                        Not configured
+                    </button>
+                </div>
+                {% endif %}
+            </div>
         </div>
         {% endif %}
 

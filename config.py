@@ -22,18 +22,18 @@ APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:5001")
 DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
 
 # Credit packs — inline pricing, no pre-created Stripe Prices needed.
-# Per-quote economics (intentional ladder, encourages annual subscription
-# for high-volume users — see SaaS_BLUEPRINT.md):
-#   Starter:  $9.99 / 8   = $1.249 per quote
-#   Pro:      $49   / 50  = $0.98  per quote
-#   Studio:   $79   / 100 = $0.79  per quote
-#   Annual:   $149 unlimited (planned next sprint)
-# Studio was deliberately shrunk from 200 to 100 credits so high-volume
-# users have a clear path to annual rather than continuing to top up packs.
+# Per-quote economics (intentional ladder; high-volume users converge on
+# annual once their per-quote spend would exceed it):
+#   Starter:  $8.99 / 10   = $0.90 per quote (—)
+#   Pro:      $39   / 50   = $0.78 per quote (13% off Starter)
+#   Studio:   $69   / 100  = $0.69 per quote (23% off Starter)
+#   Annual:   $179 / 1000-soft-cap = ~$0.18 per quote (97%+ off Starter)
+# Soft-cap is informational, not enforced — the annual tier remains
+# advertised as "unlimited" while flagging the high-volume CTA path.
 CREDIT_PACKS = {
-    "starter": {"name": "Starter",  "credits": 8,    "price_cents": 999},
-    "pro":     {"name": "Pro",      "credits": 50,   "price_cents": 4900},
-    "studio":  {"name": "Studio",   "credits": 100,  "price_cents": 7900},
+    "starter": {"name": "Starter",  "credits": 10,   "price_cents": 899},
+    "pro":     {"name": "Pro",      "credits": 50,   "price_cents": 3900},
+    "studio":  {"name": "Studio",   "credits": 100,  "price_cents": 6900},
 }
 
 # Annual unlimited subscription tier. Distinct shape from CREDIT_PACKS — no
@@ -42,14 +42,20 @@ CREDIT_PACKS = {
 # vending an annual subscription, or vice versa.
 ANNUAL_SUBSCRIPTION = {
     "name": "Annual Unlimited",
-    "price_cents": 14900,
+    "price_cents": 17900,
     "interval": "year",
 }
 
 # Soft-cap notification threshold for annual subscribers — informational
-# only, does NOT throttle generation. Configurable via env so the threshold
-# can be tuned post-launch without a redeploy.
-SOFT_CAP_THRESHOLD = int(os.environ.get("SOFT_CAP_THRESHOLD", "500"))
+# only, does NOT throttle generation. At-or-above the threshold the
+# /generate response carries a CTA pointing high-volume users toward a
+# custom-plan conversation rather than throttling them. Configurable via
+# env so the threshold can be tuned post-launch without a redeploy.
+SOFT_CAP_THRESHOLD = int(os.environ.get("SOFT_CAP_THRESHOLD", "1000"))
+
+# Contact address surfaced in the soft-cap CTA. Configurable so different
+# environments (test/staging/prod) can route the conversation differently.
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@windowquoting.com")
 
 # Seed file — used only to populate a new user's default profiles.
 # Runtime reads come from the pricing_profiles table, never this file.

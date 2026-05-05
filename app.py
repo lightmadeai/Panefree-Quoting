@@ -27,12 +27,17 @@ from generator import (
     DEFAULT_QUOTE_FOOTER, DEFAULT_INVOICE_FOOTER, DEFAULT_PHONE_NUMBER,
     INVOICE_PREFIX_DEFAULT, INVOICE_PREFIX_MAX,
 )
-from models import db, User, Transaction, PricingProfile, Quote
-from notices import build_soft_cap_notice
+from models import db, User, Transaction, PricingProfile, Quote, ContactSubmission
+from notices import build_soft_cap_notice, build_rate_limit_notice
 
 app = Flask(__name__)
 app.config.from_object(config)
 app.secret_key = config.SECRET_KEY
+
+# Session timeout (T4). PERMANENT_SESSION_LIFETIME only takes effect when
+# `session.permanent = True` — set in load_user / login. After 24h of
+# idle, the cookie expires and the user is forced through /login again.
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=24)
 
 db.init_app(app)
 
@@ -67,6 +72,37 @@ def _ensure_table_columns(table_name, additions):
     db.session.commit()
 
 
+def _ensure_starting_credit_floor():
+    """
+    One-time top-up: bump any existing user under STARTING_CREDITS up to it.
+    Idempotent — re-runs are no-ops once everyone is at-or-above. Runs at
+    boot rather than via a versioned-migration table because the project is
+    pre-launch and lift-from-5-to-10 is a one-shot courtesy. If admin
+    tooling later starts deliberately setting balances below the floor,
+    this needs a stronger guard (e.g., a `received_topup` flag).
+    """
+    db.session.execute(
+        text("UPDATE users SET credit_balance = :n WHERE credit_balance < :n"),
+        {"n": config.STARTING_CREDITS},
+    )
+    db.session.commit()
+
+
+def _backfill_email_verified():
+    """
+    Grandfather pre-Sprint-3 users as email-verified. Identifies them by
+    the absence of a verification token (Sprint 3 registration generates
+    a token; older users have none). Idempotent — re-runs only touch rows
+    still in the pre-Sprint-3 state. New post-Sprint-3 unverified users
+    have a token, so this never wrongly verifies them.
+    """
+    db.session.execute(text(
+        "UPDATE users SET email_verified = 1 "
+        "WHERE email_verified = 0 AND email_verification_token IS NULL"
+    ))
+    db.session.commit()
+
+
 with app.app_context():
     db.create_all()
     _ensure_table_columns("users", [
@@ -93,7 +129,22 @@ with app.app_context():
         # INTEGER alias and stores 0/1 — Python sees True/False via
         # SQLAlchemy's Boolean type.
         ("cancel_at_period_end", "BOOLEAN NOT NULL DEFAULT 0"),
+        # Login lockout (T4). Defaults backfill cleanly to "no failures,
+        # not locked" for existing users.
+        ("failed_login_attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("locked_until", "DATETIME"),
+        # Email verification (T4). New users get email_verified=False at
+        # registration; pre-Sprint-3 users are grandfathered to True via
+        # _backfill_email_verified() so the gate doesn't lock them out.
+        ("email_verified", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("email_verification_token", "TEXT"),
+        ("email_verification_token_expires", "DATETIME"),
     ])
+    db.session.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_users_email_verification_token "
+        "ON users(email_verification_token)"
+    ))
+    db.session.commit()
     db.session.execute(text(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_subscription_id "
         "ON users(subscription_id)"
@@ -115,6 +166,8 @@ with app.app_context():
         # generator.generate_document). Once set, never changes.
         ("invoice_prefix", "TEXT"),
     ])
+    _ensure_starting_credit_floor()
+    _backfill_email_verified()
 
 
 # ---------- Profile helpers (engine-agnostic controller layer) ----------
@@ -438,6 +491,16 @@ def compute_internal_benchmark(user, current_pane_count, current_price):
 
 # ---------- Auth ----------
 
+def _password_strength_error(password):
+    """T4 password rules: ≥8 chars AND ≥1 digit. Returns the error message
+    to flash, or None if the password passes. Pure helper for testability."""
+    if len(password) < 8:
+        return "Password must be at least 8 characters long."
+    if not any(c.isdigit() for c in password):
+        return "Password must include at least one number."
+    return None
+
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if current_user.is_authenticated:
@@ -451,20 +514,50 @@ def register():
             flash("Email and password are required.", "error")
             return render_template("register.html")
 
+        pw_error = _password_strength_error(password)
+        if pw_error:
+            flash(pw_error, "error")
+            return render_template("register.html")
+
         if User.query.filter_by(email=email).first():
             flash("That email is already registered.", "error")
             return render_template("register.html")
 
-        user = User(email=email, credit_balance=config.STARTING_CREDITS)
+        # Verification token — single-use, 24h expiry. Real email delivery
+        # is out of scope this sprint; we log the verify URL instead.
+        token = uuid.uuid4().hex
+        user = User(
+            email=email,
+            credit_balance=config.STARTING_CREDITS,
+            email_verified=False,
+            email_verification_token=token,
+            email_verification_token_expires=datetime.utcnow() + timedelta(hours=24),
+        )
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
 
         ensure_default_profiles_for_user(user)
+        verify_url = url_for("verify_email", token=token, _external=True)
+        app.logger.info(
+            "[EMAIL-VERIFICATION] new user %s — verify URL: %s", email, verify_url,
+        )
         login_user(user)
+        # Mark session permanent so PERMANENT_SESSION_LIFETIME applies.
+        from flask import session as _session
+        _session.permanent = True
+        flash(
+            "Account created. Check your email for a verification link before "
+            "generating quotes.",
+            "success",
+        )
         return redirect(url_for("index"))
 
     return render_template("register.html")
+
+
+LOGIN_LOCKOUT_THRESHOLD = 5
+LOGIN_LOCKOUT_MINUTES = 15
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -477,15 +570,64 @@ def login():
         password = request.form.get("password") or ""
 
         user = User.query.filter_by(email=email).first()
+        now = datetime.utcnow()
+
+        # Lockout check first — even a correct password is rejected during
+        # the cooldown window (otherwise the lockout has no teeth).
+        if user and user.locked_until and user.locked_until > now:
+            wait = int((user.locked_until - now).total_seconds() / 60) + 1
+            flash(
+                f"Account temporarily locked after too many failed sign-ins. "
+                f"Try again in {wait} minute{'' if wait == 1 else 's'}.",
+                "error",
+            )
+            return render_template("login.html")
+
         if not user or not user.check_password(password):
+            # Increment fail counter on a known user; unknown email gets the
+            # generic "invalid" without revealing whether the email exists.
+            if user:
+                user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+                if user.failed_login_attempts >= LOGIN_LOCKOUT_THRESHOLD:
+                    user.locked_until = now + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+                    user.failed_login_attempts = 0  # consumed → reset
+                db.session.commit()
             flash("Invalid email or password.", "error")
             return render_template("login.html")
 
+        # Successful login — reset both counter and lockout.
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.session.commit()
+
         ensure_default_profiles_for_user(user)
         login_user(user)
+        from flask import session as _session
+        _session.permanent = True
         return redirect(url_for("index"))
 
     return render_template("login.html")
+
+
+@app.route("/verify/<token>")
+def verify_email(token):
+    """One-use verification link. Tokens are 32-char uuid hex; expire 24h
+    after registration. Used token is cleared so re-clicks fail (loud is
+    better than silent — the user knows the link only works once)."""
+    user = User.query.filter_by(email_verification_token=token).first()
+    if not user:
+        flash("Verification link is invalid or has already been used.", "error")
+        return redirect(url_for("login"))
+    if user.email_verification_token_expires and \
+            user.email_verification_token_expires < datetime.utcnow():
+        flash("Verification link has expired. Sign in to request a new one.", "error")
+        return redirect(url_for("login"))
+    user.email_verified = True
+    user.email_verification_token = None
+    user.email_verification_token_expires = None
+    db.session.commit()
+    flash("Email verified — you can now generate quotes.", "success")
+    return redirect(url_for("index"))
 
 
 @app.route("/logout")
@@ -633,6 +775,40 @@ def generate():
         and user.subscription_current_period_end > now
     )
 
+    # Email verification gate (T4). Subscribers are NOT exempt — otherwise
+    # a stolen-card subscription is an abuse vector. Fires before rate
+    # limit / reserve so unverified users don't burn either.
+    if not user.email_verified:
+        return jsonify({
+            "status": "error",
+            "code": "EMAIL_NOT_VERIFIED",
+            "message": (
+                "Verify your email address before generating quotes. "
+                "Check the verification link from your registration email."
+            ),
+        }), 403
+
+    if not is_subscriber:
+        # Rolling 60-min rate limit (active subscribers exempt — they've
+        # paid for unlimited and the bypass logic upstream skips this gate).
+        # Past_due subscribers reach this path and ARE rate-limited, which
+        # is intentional: an account in dunning shouldn't double as a quote
+        # firehose.
+        window_start = now - timedelta(hours=1)
+        recent_count = Quote.query.filter(
+            Quote.user_id == user.id,
+            Quote.created_at >= window_start,
+        ).count()
+        if recent_count >= config.RATE_LIMIT_QUOTES_PER_HOUR:
+            oldest = Quote.query.filter(
+                Quote.user_id == user.id,
+                Quote.created_at >= window_start,
+            ).order_by(Quote.created_at.asc()).first().created_at
+            notice = build_rate_limit_notice(
+                recent_count, config.RATE_LIMIT_QUOTES_PER_HOUR, oldest, now,
+            )
+            return jsonify({"status": "error", **notice}), 429
+
     if is_subscriber:
         # Subscription bypass — no credit decrement, no commit needed.
         reserved = 1
@@ -651,7 +827,10 @@ def generate():
         return jsonify({
             "status": "error",
             "code": "NO_CREDITS",
-            "message": "You've run out of credits.",
+            "message": (
+                "You've used all your free credits. Buy more (from $8.99) "
+                "or subscribe to Annual Unlimited for unlimited quotes."
+            ),
             "redirect": url_for("top_up"),
         }), 402
 
@@ -741,7 +920,7 @@ def generate():
             Quote.created_at >= period_start,
         ).count()
         notice = build_soft_cap_notice(
-            quote_count, config.SOFT_CAP_THRESHOLD, config.SUPPORT_EMAIL,
+            quote_count, config.SOFT_CAP_THRESHOLD, url_for("contact"),
         )
         if notice:
             response["soft_cap_notice"] = notice
@@ -1152,6 +1331,71 @@ def billing_portal():
     except Exception as e:
         flash(f"Could not open billing portal: {e}", "error")
         return redirect(url_for("account"))
+
+
+# ---------- Custom-plan intake (soft-cap CTA target) ----------
+
+@app.route("/contact", methods=["GET", "POST"])
+@login_required
+def contact():
+    """
+    Custom-plan intake form. Linked from the soft-cap CTA in /generate
+    responses. Persists to ContactSubmission and logs a notification line —
+    no email backend yet (deferred per Sprint 3 scope).
+    """
+    if request.method == "POST":
+        company_name = (request.form.get("company_name") or "").strip()
+        current_volume = (request.form.get("current_volume") or "").strip()
+        expected_growth = (request.form.get("expected_growth") or "").strip()
+        email = (request.form.get("email") or "").strip().lower()
+
+        # Field-by-field required check so the error names what's missing.
+        missing = [name for name, v in [
+            ("Company name", company_name),
+            ("Current quote volume", current_volume),
+            ("Expected growth", expected_growth),
+            ("Email", email),
+        ] if not v]
+        if missing:
+            flash(f"Required: {', '.join(missing)}.", "error")
+            return render_template(
+                "contact.html",
+                company_name=company_name, current_volume=current_volume,
+                expected_growth=expected_growth, email=email,
+            )
+
+        # Minimal email shape check — full validation lives in Stripe/SES later.
+        if "@" not in email or "." not in email.split("@", 1)[-1]:
+            flash("Please provide a valid email address.", "error")
+            return render_template(
+                "contact.html",
+                company_name=company_name, current_volume=current_volume,
+                expected_growth=expected_growth, email=email,
+            )
+
+        sub = ContactSubmission(
+            user_id=current_user.id,
+            company_name=company_name,
+            current_volume=current_volume,
+            expected_growth=expected_growth,
+            email=email,
+        )
+        db.session.add(sub)
+        db.session.commit()
+
+        # Admin notification — structured log line until an email backend
+        # exists. Future sprint replaces this with real delivery.
+        app.logger.info(
+            "[CONTACT-SUBMISSION] from user_id=%s (%s): company=%r, "
+            "volume=%r, growth=%r, contact_email=%r",
+            current_user.id, current_user.email,
+            company_name, current_volume, expected_growth, email,
+        )
+
+        flash("Thanks — we'll be in touch shortly about your custom plan.", "success")
+        return redirect(url_for("contact"))
+
+    return render_template("contact.html")
 
 
 def _handle_payment_checkout(session_obj):

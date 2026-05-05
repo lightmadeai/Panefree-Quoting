@@ -7,7 +7,10 @@ DATABASE_PATH = os.path.join(project_root, "sovereign.db")
 SQLALCHEMY_DATABASE_URI = f"sqlite:///{DATABASE_PATH}"
 SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-STARTING_CREDITS = 5
+# Free-tier allotment granted at registration. Existing users below this
+# floor are bumped up at app boot via _ensure_starting_credit_floor() — a
+# one-time courtesy when the threshold is raised in a future sprint.
+STARTING_CREDITS = 10
 
 # --- Stripe (Sprint 2) ---
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
@@ -56,6 +59,13 @@ SOFT_CAP_THRESHOLD = int(os.environ.get("SOFT_CAP_THRESHOLD", "1000"))
 # Contact address surfaced in the soft-cap CTA. Configurable so different
 # environments (test/staging/prod) can route the conversation differently.
 SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@windowquoting.com")
+
+# Per-account rate limit. Free users (and past_due subscribers, who fall
+# through to the credit path) are capped at this many /generate calls per
+# rolling 60-minute window. Active subscribers are exempt — they bypass
+# the credit reserve already and the rate limit follows the same gate.
+# Tunable via env so we can dial it post-launch without a redeploy.
+RATE_LIMIT_QUOTES_PER_HOUR = int(os.environ.get("RATE_LIMIT_QUOTES_PER_HOUR", "10"))
 
 # Seed file — used only to populate a new user's default profiles.
 # Runtime reads come from the pricing_profiles table, never this file.

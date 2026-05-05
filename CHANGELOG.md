@@ -9,6 +9,35 @@ pipeline migration (per protocol §5.6).
 The format follows [Keep a Changelog](https://keepachangelog.com/) loosely —
 sprint manifests in `PLANNING/done/` are the authoritative record.
 
+## Sprint 3 — 2026-05-03 — Rate limit, free tier, contact intake, account security
+
+### Added
+- **Rate limiting** on `/generate`: 10 quotes per rolling 60-min window for free users (and `past_due` subscribers). Active subscribers exempt. Threshold tunable via `RATE_LIMIT_QUOTES_PER_HOUR` env (default 10). 429 response includes a countdown keyed off the oldest quote in the window. Pure helper `notices.build_rate_limit_notice()`.
+- **Email verification gate** on `/generate`: every user (including active subscribers) must verify their email before generating. New columns on `users`: `email_verified` (BOOLEAN), `email_verification_token` (TEXT, indexed), `email_verification_token_expires` (DATETIME). Token is a 32-char uuid hex; expires 24h after registration. **No email backend yet** — verify URL is logged to console (`app.logger.info("[EMAIL-VERIFICATION] …")`). Pre-Sprint-3 users grandfathered via `_backfill_email_verified()` (identifies them by absence of token).
+- **`/verify/<token>` route** flips `email_verified=True` and clears the token. Re-clicks fail (one-time link); expired tokens reject with a "request a new one" prompt.
+- **Login lockout**: 5 failed attempts → 15-minute cooldown. New columns `failed_login_attempts` (INTEGER, default 0), `locked_until` (DATETIME, nullable). Cooldown rejects even correct passwords (otherwise lockout has no teeth). Successful login resets both fields.
+- **Password strength rules** on `/register`: ≥8 chars + ≥1 digit. Pure helper `_password_strength_error()` returns the flash message or None.
+- **`/contact` route + `ContactSubmission` model** for custom-plan intake (replaces the soft-cap CTA's old `mailto:` target). Form: company name, current quote volume, expected growth, reply-to email. Persists to DB; admin notification is a structured `app.logger.info()` line. No email backend yet.
+- **`build_soft_cap_notice()` signature change**: takes `contact_url` instead of `contact_email`; drops the `contact_email` field from the payload. Caller (e.g., `/generate`) passes `url_for("contact")`. The helper is now URL-agnostic — mailto:, https://, /path all work.
+- **Session timeout**: 24h of idle → cookie expires. `app.config["PERMANENT_SESSION_LIFETIME"]` set in app init; sessions marked `permanent = True` in `/register` and `/login`.
+
+### Changed
+- **`STARTING_CREDITS = 10`** (was 5). New registrations grant 10 free credits.
+- **`_ensure_starting_credit_floor()`** runs at boot and one-time-bumps any existing user under 10 up to the floor. Idempotent — no-op once everyone's at-or-above.
+- **NO_CREDITS prompt** on `/generate` now reads "You've used all your free credits. Buy more (from $8.99) or subscribe to Annual Unlimited for unlimited quotes." (was "You've run out of credits."). Frontend still redirects to `/top-up`.
+- **Test helpers** (`_register_and_login` in both `test_sprint3.py` and `test_sprint3_pipeline.py`): default password upgraded to `"pw1234567"` (passes T4 strength rules); helpers auto-verify the registered user's email so existing tests don't have to navigate the gate.
+
+### Migration notes
+- Six new columns on `users` (one BOOLEAN, two INTEGER-with-default, three TEXT/DATETIME). All additive — backfill defaults handle existing rows.
+- One new table: `contact_submissions`. Created via `db.create_all()`; no ALTER migration needed.
+- Sprint 1's `subscription_id` UNIQUE INDEX pattern reused for `email_verification_token` (regular index, not UNIQUE — token uniqueness is enforced by uuid generation, not the schema).
+- Existing users with `email_verified=False` are grandfathered to True at boot via `_backfill_email_verified()`. The backfill keys off `email_verification_token IS NULL` so post-Sprint-3 unverified users are not wrongly auto-verified.
+
+### Test counts
+- 32 tests in `test_sprint3_pipeline.py` (5 rate-limit helper + 3 rate-limit integration + 5 free tier + 6 contact intake + 1 soft-cap CTA wiring + 3 password helper + 2 registration password rules + 2 lockout + 5 email verification + 1 backfill).
+- Sprint-2 soft-cap tests in `test_sprint2.py` updated for the new helper signature.
+- Legacy `test_sprint3.py` (pre-pipeline Sprint 3): 7 tests still pass after helper update.
+
 ## Sprint 2 — 2026-05-03 — Pricing update, cancel UX, soft-cap CTA
 
 ### Changed

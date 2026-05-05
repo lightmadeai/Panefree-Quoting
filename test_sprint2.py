@@ -189,29 +189,34 @@ class TestPricingPageGrid(unittest.TestCase):
 
 
 class TestSoftCapCTA(unittest.TestCase):
-    """T3 acceptance — soft-cap CTA payload shape for at/over-threshold subs."""
+    """
+    Sprint 2 T3 acceptance — soft-cap CTA payload shape.
+    Sprint 3 T3 changed `contact_email` to `contact_url` (now points at the
+    in-app /contact form instead of mailto:). Tests updated accordingly.
+    """
 
     def setUp(self):
         from notices import build_soft_cap_notice
         self.build = build_soft_cap_notice
         self.threshold = 1000
-        self.email = "support@windowquoting.com"
+        self.url = "/contact"
 
     def test_below_threshold_returns_none(self):
-        self.assertIsNone(self.build(999, self.threshold, self.email))
+        self.assertIsNone(self.build(999, self.threshold, self.url))
 
     def test_at_threshold_returns_cta(self):
-        notice = self.build(1000, self.threshold, self.email)
+        notice = self.build(1000, self.threshold, self.url)
         self.assertIsNotNone(notice)
         self.assertEqual(notice["count"], 1000)
         self.assertEqual(notice["threshold"], 1000)
         self.assertIn("1000 of 1000", notice["message"])
         self.assertIn("custom pricing", notice["message"])
-        self.assertEqual(notice["contact_email"], self.email)
-        self.assertEqual(notice["contact_url"], f"mailto:{self.email}")
+        self.assertEqual(notice["contact_url"], "/contact")
+        # Sprint 3 dropped contact_email — caller passes the URL it wants.
+        self.assertNotIn("contact_email", notice)
 
     def test_above_threshold_returns_cta(self):
-        notice = self.build(2500, self.threshold, self.email)
+        notice = self.build(2500, self.threshold, self.url)
         self.assertIsNotNone(notice)
         self.assertEqual(notice["count"], 2500)
         self.assertIn("2500 of 1000", notice["message"])
@@ -219,7 +224,13 @@ class TestSoftCapCTA(unittest.TestCase):
     def test_threshold_zero_means_always_show(self):
         # Edge case: threshold=0 with any count >=0 returns a notice.
         # Not a configuration we'd ship, but the function shouldn't trip on it.
-        self.assertIsNotNone(self.build(0, 0, self.email))
+        self.assertIsNotNone(self.build(0, 0, self.url))
+
+    def test_caller_chooses_url_shape(self):
+        # Helper is URL-agnostic — caller can pass mailto:, https://, /path, etc.
+        for url in ["mailto:x@y.com", "https://example.com/contact", "/contact"]:
+            notice = self.build(1000, self.threshold, url)
+            self.assertEqual(notice["contact_url"], url)
 
 
 if __name__ == "__main__":

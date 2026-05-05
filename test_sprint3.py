@@ -45,8 +45,19 @@ def _fresh_app():
     return app_mod, tmp_db
 
 
-def _register_and_login(app_mod, client, email, password="pw12345"):
+def _register_and_login(app_mod, client, email, password="pw1234567"):
+    # Password must satisfy Sprint 3 T4 rules: ≥8 chars + ≥1 digit. "pw1234567" passes.
     client.post("/register", data={"email": email, "password": password}, follow_redirects=True)
+    # Auto-verify email for legacy tests — they predate the T4 verification
+    # gate and shouldn't have to navigate it. Tests that specifically want
+    # to test the gate should set email_verified=False explicitly.
+    with app_mod.app.app_context():
+        user = app_mod.User.query.filter_by(email=email).first()
+        if user:
+            user.email_verified = True
+            user.email_verification_token = None
+            user.email_verification_token_expires = None
+            app_mod.db.session.commit()
 
 
 def test_engine_purity():

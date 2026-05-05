@@ -13,7 +13,7 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     email = db.Column(db.Text, unique=True, nullable=False)
     password_hash = db.Column(db.Text, nullable=False)
-    credit_balance = db.Column(db.Integer, nullable=False, default=5)
+    credit_balance = db.Column(db.Integer, nullable=False, default=10)
     # Subscription state. NULL = no subscription history; non-NULL takes
     # values "active", "past_due", or "canceled". The /generate reserve
     # bypass keys off `subscription_current_period_end`, not this field
@@ -36,6 +36,19 @@ class User(UserMixin, db.Model):
     # actually terminates (sub.deleted webhook), so a future re-subscribe
     # starts in the renewing state.
     cancel_at_period_end = db.Column(db.Boolean, nullable=False, default=False)
+    # Login lockout (T4 abuse-prevention). Count resets to 0 on successful
+    # login; locked_until is the wall-clock time at which the lockout
+    # expires. NULL means "never been locked".
+    failed_login_attempts = db.Column(db.Integer, nullable=False, default=0)
+    locked_until = db.Column(db.DateTime, nullable=True)
+    # Email verification gate. Required before /generate succeeds —
+    # subscribers included (no exemption; otherwise stolen-card subs are
+    # an abuse vector). Token is a 32-char uuid hex; expires 24h after
+    # registration. Pre-Sprint-3 users are grandfathered as verified via
+    # _backfill_email_verified() at boot.
+    email_verified = db.Column(db.Boolean, nullable=False, default=False)
+    email_verification_token = db.Column(db.Text, nullable=True, index=True)
+    email_verification_token_expires = db.Column(db.DateTime, nullable=True)
     business_name = db.Column(db.Text, nullable=True)
     phone_number = db.Column(db.Text, nullable=True)
     # NULL means "use sovereign default"; non-NULL is the user's customized
@@ -90,6 +103,28 @@ class PricingProfile(db.Model):
     price_data = db.Column(db.JSON, nullable=False)
     is_default = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class ContactSubmission(db.Model):
+    """
+    Custom-plan intake from the soft-cap CTA. Persisted only — no email
+    delivery yet (deferred per Sprint 3 scope). Admin notification is a
+    structured log line; future sprint adds actual delivery.
+    """
+    __tablename__ = "contact_submissions"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    company_name = db.Column(db.Text, nullable=False)
+    # Free-text — could be a number ("~1500"), a range ("1k-2k"), or a
+    # description ("highly variable seasonal"). Don't constrain the shape;
+    # downstream sales conversation parses it.
+    current_volume = db.Column(db.Text, nullable=False)
+    expected_growth = db.Column(db.Text, nullable=False)
+    # Reply-to address; intentionally NOT defaulted from User.email so the
+    # sender can route replies to a different inbox if they want.
+    email = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
 
 class Quote(db.Model):

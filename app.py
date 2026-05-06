@@ -66,6 +66,38 @@ if config.STRIPE_SECRET_KEY:
     stripe.api_key = config.STRIPE_SECRET_KEY
 
 
+@app.context_processor
+def inject_support_email():
+    """
+    Sprint 4 T5: surface SUPPORT_EMAIL into every Jinja render so the
+    site-wide footer, account page, contact CTA, and error pages can
+    show the same address. Sourced from config (env-configurable per
+    deployment) — never hardcoded in templates.
+    """
+    return {"support_email": config.SUPPORT_EMAIL}
+
+
+@app.errorhandler(404)
+def _err_404(e):
+    """Friendly 404 with a contact route. Falls back to plain text if the
+    template hasn't shipped yet."""
+    try:
+        return render_template("404.html"), 404
+    except Exception:
+        return f"404 — page not found. Need help? Contact {config.SUPPORT_EMAIL}", 404
+
+
+@app.errorhandler(500)
+def _err_500(e):
+    """Friendly 500 with a contact route. App-side rollback already happened
+    upstream via the route's own try/except — this is purely the customer-
+    facing page."""
+    try:
+        return render_template("500.html"), 500
+    except Exception:
+        return f"500 — internal error. Please try again, or contact {config.SUPPORT_EMAIL}", 500
+
+
 @login_manager.user_loader
 def load_user(user_id):
     # BUG-003 (Sprint 4): no longer auto-seeds starter profiles. New users

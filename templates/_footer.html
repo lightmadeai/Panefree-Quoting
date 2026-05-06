@@ -1,0 +1,8 @@
+{# Sprint 4 T5: site-wide footer. Single source of truth for the support
+   address — pulled from the inject_support_email context processor in
+   app.py, which reads config.SUPPORT_EMAIL (env-configurable). #}
+<footer class="border-t border-slate-200 mt-16 py-6">
+    <div class="max-w-5xl mx-auto px-6 text-center text-xs text-slate-500">
+        Need help? Contact <a href="mailto:{{ support_email }}" class="text-blue-600 hover:underline">{{ support_email }}</a>
+    </div>
+</footer>

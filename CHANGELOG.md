@@ -9,6 +9,48 @@ pipeline migration (per protocol §5.6).
 The format follows [Keep a Changelog](https://keepachangelog.com/) loosely —
 sprint manifests in `PLANNING/done/` are the authoritative record.
 
+## Sprint 4 — 2026-05-06 — Code-side ship readiness
+
+### Security
+
+- **BUG-008 (P0): arbitrary file download in `/download/<filename>`** — pre-fix, any authenticated user could retrieve `sovereign.db`, `app.py`, `.env`, or any other file under `project_root` by name. Now sealed: PDFs live under `output/<user_id>/`; the download route only resolves filenames inside `_user_pdf_dir(current_user.id)`. The user_id never appears in the URL — it's pulled from the session — so a leaked filename from user A is unreachable when user B is logged in. 404 (not 403) on miss avoids leaking whether the filename exists for some other user.
+
+### Added
+
+- **Sequential quote IDs (BUG-007).** Quotes now get a customer-facing `Q-NNNNNN` number in addition to the legacy URL slug, mirroring the existing invoice numbering. New columns: `users.next_quote_number INTEGER NOT NULL DEFAULT 1`, `users.quote_prefix TEXT NOT NULL DEFAULT 'Q-'`, `quotes.quote_number INTEGER NULL`, `quotes.quote_prefix TEXT NULL`. `_claim_quote_number()` claims atomically at `/generate` time; the prefix is snapshotted onto the Quote so later prefix changes don't retroactively rename existing quotes (same stability invariant invoices have).
+- **80% soft-warning tier (T1).** `notices.build_soft_cap_warning(quote_count, threshold)` returns a no-CTA heads-up payload at 80%–99% of `SOFT_CAP_THRESHOLD`; the existing 100%+ `soft_cap_notice` (with full CTA) is unchanged. Mutually exclusive — `/generate` never carries both.
+- **Site-wide footer + contact email plumbing (T5).** `templates/_footer.html` is included on every page; `inject_support_email` context processor surfaces `config.SUPPORT_EMAIL` to all templates so the address is sourced once from env. Account page gains a "Need help?" line with the same address.
+- **404 and 500 error templates** with a contact CTA pointing at `SUPPORT_EMAIL`.
+- **`DEPLOYMENT.md`** — env-var reference, pre-flight checks (incl. schema-parity comparison via SQLAlchemy `inspect()`), file system layout, BUG-008 architecture explanation, smoke-test checklist, rollback plan.
+- **`.env.example`** — every required + optional variable documented inline with notes on test-mode vs live-mode.
+- **`testing/stress_probe.py` extended (T3)** with 4 verification probes (P13–P16): no spurious "(Custom Rate)", sequential `Q-` numbering, zero-profile redirect, cross-tenant download blocked. All 11 probes pass against `sprint-4`.
+- **`testing/stress-test-results.md`** documents pre-fix vs post-fix probe output verbatim and explains the BUG-008 storage architecture.
+
+### Changed
+
+- **No more starter profiles for new users (BUG-003).** `ensure_default_profiles_for_user` is no longer called from `register`, `login`, or `load_user`. The `/` route now redirects users with zero profiles to `/profiles/new` with an onboarding flash — first profile creation IS the onboarding step. Existing users with profiles see no behavior change.
+- **Quote form persists in `sessionStorage` (BUG-004).** Saved on every input change, restored on page load when no server-rendered values are present, cleared after a successful `/generate`. Solves the "user runs out of credits, navigates to top-up, returns to a blank form" abandonment risk.
+- **Default override fields now use `.placeholder`, not `.value` (BUG-006).** Pre-fix, `populateRates()` wrote computed defaults into `.value`, which `engine.py` flagged as a custom rate on every line item — every PDF read "(Custom Rate)" even on default profiles. Now `.value` stays empty unless the user explicitly types a different number.
+- **Signup copy says "10 free quote credits" (BUG-002).** Was "5"; mismatched `STARTING_CREDITS = 10`.
+- **Soft-cap threshold removed from the annual-tier pricing card.** `top_up.html` advertises "Unlimited quotes" only — the threshold lives in the backend (`config.SOFT_CAP_THRESHOLD`) and drives the warning/notice signaling but is no longer surfaced in marketing.
+- **CLAUDE.md updated** with new sections on onboarding, quote numbering, and PDF storage architecture; data-model table extended with the new User and Quote columns; soft-cap section expanded with the two-tier signaling.
+
+### Fixed
+
+- **BUG-001 (P0): signup IntegrityError on `users.total_recovered_value`.** Orphaned schema column not declared in the SQLAlchemy `User` model; the live DB had it as `NOT NULL` with no `DEFAULT`, so any INSERT (which the model could no longer set) violated the constraint. Fixed by dropping the column from `sovereign.db` (SQLite 3.50.4 supports `ALTER TABLE ... DROP COLUMN` natively). Code unchanged. Pre-fix DB backed up to `sovereign.db.bak-pre-sprint4`. Schema-parity check added to `DEPLOYMENT.md` Section 2.4 and the lesson documented in Section 5 to prevent recurrence.
+
+### Migration notes
+
+- `users.next_quote_number INTEGER NOT NULL DEFAULT 1` and `users.quote_prefix TEXT NOT NULL DEFAULT 'Q-'` — additive, default-backfilled.
+- `quotes.quote_number INTEGER NULL` and `quotes.quote_prefix TEXT NULL` — additive, NULL for pre-Sprint-4 rows. The generator's hash-fallback handles those, so re-renders of old PDFs keep their original identifier.
+- `output/<user_id>/` directory tree — created on demand by `_user_pdf_dir()`. Legacy PDFs in `project_root/` from prior testing are now unreachable from the download route (which is the intended outcome). Optional cleanup: `rm project_root/quote_*.pdf project_root/invoice_*.pdf`.
+- `users.total_recovered_value` removed from the live DB — see BUG-001 above. Not in the SQLAlchemy model, so no app-side code change.
+
+### Test counts
+
+- 11 stress probes in `testing/stress_probe.py` — all pass.
+- No new pytest tests added in Sprint 4 (T2's bug fixes are covered by the probes; full pytest expansion is a Sprint 5 candidate).
+
 ## Sprint 3 — 2026-05-03 — Rate limit, free tier, contact intake, account security
 
 ### Added

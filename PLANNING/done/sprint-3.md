@@ -4,7 +4,7 @@ project: window-quoting
 drafted_by: Jade
 redraft: true
 redraft_reason: Depends on redrafted Sprint 2. Removed credit_balance/credit_tier duplication, aligned rate limit scope.
-status: done
+status: draft
 created: 2026-05-03
 redrafted: 2026-05-03
 depends_on: sprint-2-completion

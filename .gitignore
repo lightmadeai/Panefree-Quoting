@@ -20,3 +20,7 @@ output/
 .env
 .env.local
 .env.*.local
+
+# Pre-sprint DB backups
+*.bak
+*.bak-*

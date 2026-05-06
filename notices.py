@@ -30,6 +30,37 @@ def build_soft_cap_notice(quote_count, threshold, contact_url):
     }
 
 
+def build_soft_cap_warning(quote_count, threshold):
+    """
+    Early-warning tier for annual subscribers approaching the soft cap
+    (Sprint 4 T1). Fires at 80% of `threshold` and stays active until the
+    user crosses 100%, at which point the upstream soft_cap_notice takes
+    over with its CTA. This warning has NO CTA — it's a heads-up, not a
+    sales ask.
+
+      < 80% threshold  -> None (silent)
+      80-99% threshold -> warning payload, informational only
+      >= 100%          -> None here (caller uses build_soft_cap_notice instead)
+
+    The 80% boundary is computed integer-style (`threshold * 8 // 10`) so
+    behavior is deterministic for any integer threshold and there's no
+    floating-point edge at exact 80% boundaries.
+    """
+    warning_floor = (threshold * 8) // 10
+    if quote_count < warning_floor or quote_count >= threshold:
+        return None
+    return {
+        "code": "SOFT_CAP_WARNING",
+        "count": quote_count,
+        "warning_threshold": warning_floor,
+        "soft_cap": threshold,
+        "message": (
+            f"You've used {quote_count}+ quotes this year. "
+            f"We'll reach out if you need volume pricing."
+        ),
+    }
+
+
 def build_rate_limit_notice(quote_count, threshold, oldest_in_window, now):
     """
     Rolling-window rate-limit response. Returns None if the user is under

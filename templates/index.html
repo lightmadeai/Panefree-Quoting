@@ -194,15 +194,33 @@
                             const el = document.querySelector(`[name="${name}"]`);
                             if (el && v !== undefined && v !== null) el.value = v;
                         };
+                        // BUG-006 fix (Sprint 4): floor + addon override fields use
+                        // placeholder rather than value so the engine doesn't see them
+                        // as "custom" when the user accepts the default. Pre-fix,
+                        // populateRates wrote the computed default into .value, which
+                        // engine.py then flagged as an override on every line item —
+                        // so every quote PDF read "(Custom Rate)" even when nothing
+                        // was customized. Setting placeholder leaves .value empty
+                        // unless the user explicitly types a different number.
+                        const setPlaceholder = (name, v) => {
+                            const el = document.querySelector(`[name="${name}"]`);
+                            if (el && v !== undefined && v !== null) {
+                                el.placeholder = v;
+                                // Also clear any stale value left over from a previous
+                                // profile selection — switching profiles must not leave
+                                // the old default's number in the field.
+                                el.value = '';
+                            }
+                        };
 
                         function populateRates(profileName) {
                             const p = profilesData[profileName];
                             if (!p) return;
                             const br = Number(p.base_pane_rate) || 0;
                             const ss = p.story_surcharges || {};
-                            setVal('override_floor1', (br * (Number(ss.floor1) || 1)).toFixed(2));
-                            setVal('override_floor2', (br * (Number(ss.floor2) || 1)).toFixed(2));
-                            setVal('override_floor3', (br * (Number(ss.floor3) || 1)).toFixed(2));
+                            setPlaceholder('override_floor1', (br * (Number(ss.floor1) || 1)).toFixed(2));
+                            setPlaceholder('override_floor2', (br * (Number(ss.floor2) || 1)).toFixed(2));
+                            setPlaceholder('override_floor3', (br * (Number(ss.floor3) || 1)).toFixed(2));
 
                             const ar = p.add_on_rates || {};
                             const addonMap = {
@@ -212,9 +230,13 @@
                             };
                             for (const [addonName, field] of Object.entries(addonMap)) {
                                 const v = ar[addonName];
-                                setVal(field, v !== undefined ? Number(v).toFixed(2) : '');
+                                setPlaceholder(field, v !== undefined ? Number(v).toFixed(2) : '');
                             }
 
+                            // Callout and tax remain as actual values (auto-filled +
+                            // editable). These don't drive a "(Custom Rate)" label —
+                            // tax_override is a separate engine code path, callout is
+                            // a registry mutation. So pre-filling them is intended UX.
                             setVal('tax_override_percent', (Number(p.tax_rate || 0) * 100).toFixed(1));
                             setVal('callout_override', Number(p.base_callout_fee || 0).toFixed(2));
                         }

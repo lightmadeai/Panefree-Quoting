@@ -9,6 +9,23 @@ from decimal import Decimal
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
+
+def _user_pdf_dir(user_id):
+    """
+    Per-user PDF storage directory. The /download route only ever reads
+    from <OUTPUT_DIR>/<current_user.id>/, so cross-tenant filename guesses
+    can't escape the caller's own bucket — the user_id never appears in
+    URLs, it's pulled from the session.
+
+    BUG-008 fix (Sprint 4): pre-fix, the download route served any file in
+    project_root, exposing sovereign.db and source files to any logged-in
+    user. Per-user buckets contain only PDFs that user has generated.
+    """
+    import config as _config
+    d = os.path.join(_config.OUTPUT_DIR, str(int(user_id)))
+    os.makedirs(d, exist_ok=True)
+    return d
+
 from flask import (
     Flask, render_template, request, send_file, jsonify,
     redirect, url_for, flash, abort
@@ -28,7 +45,7 @@ from generator import (
     INVOICE_PREFIX_DEFAULT, INVOICE_PREFIX_MAX,
 )
 from models import db, User, Transaction, PricingProfile, Quote, ContactSubmission
-from notices import build_soft_cap_notice, build_rate_limit_notice
+from notices import build_soft_cap_notice, build_soft_cap_warning, build_rate_limit_notice
 
 app = Flask(__name__)
 app.config.from_object(config)
@@ -843,7 +860,7 @@ def generate():
         # ?type=INVOICE.
         doc_type = "QUOTE"
         filename = f"{doc_type.lower()}_{uuid.uuid4().hex[:6]}.pdf"
-        output_path = os.path.join(project_root, filename)
+        output_path = os.path.join(_user_pdf_dir(current_user.id), filename)
         label = sanitize_label(data.get("label"))
         customer_name = _sanitize_storage(data.get("customer_name"), CUSTOMER_NAME_MAX)
         customer_address = _sanitize_storage(data.get("customer_address"), CUSTOMER_ADDR_MAX)
@@ -919,11 +936,21 @@ def generate():
             Quote.user_id == user.id,
             Quote.created_at >= period_start,
         ).count()
-        notice = build_soft_cap_notice(
-            quote_count, config.SOFT_CAP_THRESHOLD, url_for("contact"),
-        )
-        if notice:
-            response["soft_cap_notice"] = notice
+        # Two tiers (Sprint 4 T1):
+        #   80%-99%  -> soft_cap_warning   (heads-up, no CTA)
+        #   >=100%   -> soft_cap_notice    (full CTA pointing at /contact)
+        # Mutually exclusive by construction (build_soft_cap_warning returns
+        # None at >= threshold), but checking warning first means a single
+        # response never carries both.
+        warning = build_soft_cap_warning(quote_count, config.SOFT_CAP_THRESHOLD)
+        if warning:
+            response["soft_cap_warning"] = warning
+        else:
+            notice = build_soft_cap_notice(
+                quote_count, config.SOFT_CAP_THRESHOLD, url_for("contact"),
+            )
+            if notice:
+                response["soft_cap_notice"] = notice
 
     return jsonify(response)
 
@@ -931,8 +958,27 @@ def generate():
 @app.route("/download/<filename>")
 @login_required
 def download(filename):
+    """
+    Serve a generated PDF from the caller's per-user bucket.
+
+    BUG-008 fix (Sprint 4): pre-fix, this route served any file in
+    project_root by name — `sovereign.db`, source files, anything. The
+    fix pins lookups to <OUTPUT_DIR>/<current_user.id>/<basename>:
+
+      - basename() strips path traversal (`..`, leading slash)
+      - the user_id comes from the session, not the URL, so a leaked
+        filename from user A is unreachable when user B is logged in
+      - the bucket directory only ever contains PDFs this user generated,
+        so even an exact filename match can't escape sandbox
+
+    404 (not 403) on miss — don't leak whether the filename exists for
+    another user.
+    """
     safe_name = os.path.basename(filename)
-    return send_file(os.path.join(project_root, safe_name), as_attachment=True)
+    full_path = os.path.join(_user_pdf_dir(current_user.id), safe_name)
+    if not os.path.isfile(full_path):
+        abort(404)
+    return send_file(full_path, as_attachment=True)
 
 
 # ---------- Profile CRUD ----------
@@ -1115,7 +1161,7 @@ def quote_render_pdf(quote_id):
 
     snapshot = load_quote_snapshot(q)
     filename = f"{doc_type.lower()}_{uuid.uuid4().hex[:6]}.pdf"
-    output_path = os.path.join(project_root, filename)
+    output_path = os.path.join(_user_pdf_dir(current_user.id), filename)
 
     # Sequential number for INVOICE only (Feature 2). QUOTE keeps the
     # opaque hash from derive_doc_code — quotes aren't legally binding,

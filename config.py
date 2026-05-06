@@ -7,6 +7,12 @@ DATABASE_PATH = os.path.join(project_root, "sovereign.db")
 SQLALCHEMY_DATABASE_URI = f"sqlite:///{DATABASE_PATH}"
 SQLALCHEMY_TRACK_MODIFICATIONS = False
 
+# Generated PDFs live here, segregated by user ID. The download route
+# (BUG-008 fix, Sprint 4) only ever reads from <OUTPUT_DIR>/<current_user.id>/,
+# so a filename leaked to user A is unreachable as user B and the directory
+# never contains source code or DB files.
+OUTPUT_DIR = os.path.join(project_root, "output")
+
 # Free-tier allotment granted at registration. Existing users below this
 # floor are bumped up at app boot via _ensure_starting_credit_floor() — a
 # one-time courtesy when the threshold is raised in a future sprint.

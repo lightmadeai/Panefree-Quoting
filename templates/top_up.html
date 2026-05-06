@@ -118,7 +118,12 @@
                 <div class="mt-2 text-emerald-800">
                     <span class="font-semibold">Unlimited</span> quotes
                 </div>
-                <div class="text-xs text-emerald-700 italic mt-1">Soft cap: {{ "{:,}".format(soft_cap) }} / year</div>
+                {# BUG-006/Sprint-4 T1: soft-cap threshold removed from the pricing card. #}
+                {# The annual tier is advertised as "Unlimited" — the threshold lives only #}
+                {# in the backend (notices.py) where it drives the soft-cap CTA at 100% and #}
+                {# the soft-warning at 80%. Customers shouldn't see a number in marketing. #}
+                {# `soft_cap` is still passed in via context for the active-subscriber banner #}
+                {# logic elsewhere on the page; this card just doesn't render it anymore. #}
                 <div class="text-xs text-emerald-700 font-semibold mt-1 h-4">97%+ off Starter</div>
 
                 {% if simulator_active %}
@@ -155,5 +160,6 @@
             <a href="{{ url_for('index') }}" class="text-slate-500 hover:text-slate-700 text-sm">← Back to dashboard</a>
         </div>
     </main>
+    {% include "_footer.html" %}
 </body>
 </html>

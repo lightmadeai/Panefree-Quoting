@@ -10,10 +10,17 @@ __pycache__/
 
 # Generated PDFs (runtime output from /generate, /quotes/<id>/pdf,
 # and test_plumbing.py — the test writes literal quote.pdf / invoice.pdf).
+# Sprint 4 BUG-008 fix: PDFs now live under output/<user_id>/, but the
+# legacy top-level pattern is kept so leftover files don't get re-tracked.
 quote*.pdf
 invoice*.pdf
+output/
 
 # Env / secrets
 .env
 .env.local
 .env.*.local
+
+# Pre-sprint DB backups
+*.bak
+*.bak-*

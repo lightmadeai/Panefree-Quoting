@@ -7,7 +7,7 @@ redraft_reason: Original draft proposed rebuilding features that already exist (
 research_refs: [research/sprint-2-pricing.md]
 audited_by: Inquisitor (pending re-audit)
 audit_status: approved
-status: done
+status: draft
 created: 2026-05-03
 redrafted: 2026-05-03
 depends_on: sprint-1-post-audit (PASS)

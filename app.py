@@ -9,6 +9,23 @@ from decimal import Decimal
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
+
+def _user_pdf_dir(user_id):
+    """
+    Per-user PDF storage directory. The /download route only ever reads
+    from <OUTPUT_DIR>/<current_user.id>/, so cross-tenant filename guesses
+    can't escape the caller's own bucket — the user_id never appears in
+    URLs, it's pulled from the session.
+
+    BUG-008 fix (Sprint 4): pre-fix, the download route served any file in
+    project_root, exposing sovereign.db and source files to any logged-in
+    user. Per-user buckets contain only PDFs that user has generated.
+    """
+    import config as _config
+    d = os.path.join(_config.OUTPUT_DIR, str(int(user_id)))
+    os.makedirs(d, exist_ok=True)
+    return d
+
 from flask import (
     Flask, render_template, request, send_file, jsonify,
     redirect, url_for, flash, abort
@@ -28,7 +45,7 @@ from generator import (
     INVOICE_PREFIX_DEFAULT, INVOICE_PREFIX_MAX,
 )
 from models import db, User, Transaction, PricingProfile, Quote, ContactSubmission
-from notices import build_soft_cap_notice, build_rate_limit_notice
+from notices import build_soft_cap_notice, build_soft_cap_warning, build_rate_limit_notice
 
 app = Flask(__name__)
 app.config.from_object(config)
@@ -49,14 +66,46 @@ if config.STRIPE_SECRET_KEY:
     stripe.api_key = config.STRIPE_SECRET_KEY
 
 
+@app.context_processor
+def inject_support_email():
+    """
+    Sprint 4 T5: surface SUPPORT_EMAIL into every Jinja render so the
+    site-wide footer, account page, contact CTA, and error pages can
+    show the same address. Sourced from config (env-configurable per
+    deployment) — never hardcoded in templates.
+    """
+    return {"support_email": config.SUPPORT_EMAIL}
+
+
+@app.errorhandler(404)
+def _err_404(e):
+    """Friendly 404 with a contact route. Falls back to plain text if the
+    template hasn't shipped yet."""
+    try:
+        return render_template("404.html"), 404
+    except Exception:
+        return f"404 — page not found. Need help? Contact {config.SUPPORT_EMAIL}", 404
+
+
+@app.errorhandler(500)
+def _err_500(e):
+    """Friendly 500 with a contact route. App-side rollback already happened
+    upstream via the route's own try/except — this is purely the customer-
+    facing page."""
+    try:
+        return render_template("500.html"), 500
+    except Exception:
+        return f"500 — internal error. Please try again, or contact {config.SUPPORT_EMAIL}", 500
+
+
 @login_manager.user_loader
 def load_user(user_id):
-    user = db.session.get(User, int(user_id))
-    # Idempotent — no-op once profiles exist. Protects users whose session
-    # predates Sprint 2 (registered before profile seeding was added).
-    if user:
-        ensure_default_profiles_for_user(user)
-    return user
+    # BUG-003 (Sprint 4): no longer auto-seeds starter profiles. New users
+    # are routed through /profiles/new via the index redirect — they own
+    # the act of creating their first profile, which doubles as onboarding.
+    # Existing users keep whatever profiles they already have; only the
+    # auto-seed for an empty profile table was removed.
+    return db.session.get(User, int(user_id))
 
 
 def _ensure_table_columns(table_name, additions):
@@ -116,6 +165,19 @@ with app.app_context():
         # Per-user invoice prefix (Feature 3). DEFAULT 'INV-' preserves the
         # original Feature 2 hardcoded behavior for users who never customize.
         ("invoice_prefix", "TEXT NOT NULL DEFAULT 'INV-'"),
+        # Per-user sequential quote counter (BUG-007, Sprint 4). Mirrors
+        # next_invoice_number — the counter sits on User, claimed once at
+        # /generate time and snapshotted onto Quote.quote_number. Default 1
+        # so the first quote a user generates renders as Q-000001. Existing
+        # users get the column with default 1; their pre-Sprint-4 quotes
+        # show the legacy hash code as before (since Quote.quote_number
+        # remains NULL for those rows).
+        ("next_quote_number", "INTEGER NOT NULL DEFAULT 1"),
+        # Per-user quote prefix (BUG-007). Default 'Q-' is the same kind of
+        # back-compat default invoice_prefix uses. Snapshotted onto Quote
+        # at claim time so a later prefix change doesn't retroactively
+        # rename existing quotes — same stability rule as invoices.
+        ("quote_prefix", "TEXT NOT NULL DEFAULT 'Q-'"),
         # Subscription columns. UNIQUE on subscription_id is created as a
         # separate index below — SQLite's ALTER TABLE ADD COLUMN cannot
         # apply UNIQUE in-place. All three are nullable: existing users
@@ -165,6 +227,15 @@ with app.app_context():
         # (those fall back to "INV-" via the generator default — see
         # generator.generate_document). Once set, never changes.
         ("invoice_prefix", "TEXT"),
+        # Sequential quote number (BUG-007, Sprint 4). Claimed once at
+        # /generate time; mirrors invoice_number's lifecycle on the quote
+        # side. Nullable for back-compat: pre-Sprint-4 quotes have NULL
+        # here and the generator falls back to the legacy hash doc_code
+        # so old PDFs re-render with the same identifier they had before.
+        ("quote_number", "INTEGER"),
+        # Snapshot of User.quote_prefix at claim time (BUG-007). Same
+        # stability invariant as invoice_prefix: once set, never changes.
+        ("quote_prefix", "TEXT"),
     ])
     _ensure_starting_credit_floor()
     _backfill_email_verified()
@@ -443,6 +514,42 @@ def _claim_invoice_number(quote):
     return claimed
 
 
+def _claim_quote_number(quote):
+    """
+    Atomically claim the next sequential quote number for this quote's owner
+    and persist it on the Quote row. Same atomic-UPDATE pattern as
+    _claim_invoice_number — bump first, read back, snapshot prefix.
+
+    Quote numbers are NOT a legal/tax compliance artifact (only invoice
+    numbers are), but we apply the same gap-aware semantics for consistency
+    and so that "Q-000004" reads naturally to a customer whose previous
+    quote was Q-000003. Idempotent: if the quote already has a number,
+    return it. Failure semantics mirror the invoice path: claim is kept
+    even if downstream PDF render fails (we'd rather see a gap than reuse
+    a number).
+    """
+    if quote.quote_number is not None:
+        return quote.quote_number, quote.quote_prefix or "Q-"
+
+    db.session.execute(
+        text("UPDATE users SET next_quote_number = next_quote_number + 1 "
+             "WHERE id = :uid"),
+        {"uid": quote.user_id},
+    )
+    row = db.session.execute(
+        text("SELECT next_quote_number, quote_prefix FROM users "
+             "WHERE id = :uid"),
+        {"uid": quote.user_id},
+    ).first()
+    claimed = row[0] - 1
+    prefix = row[1] if row[1] is not None else "Q-"
+
+    quote.quote_number = claimed
+    quote.quote_prefix = prefix
+    db.session.commit()
+    return claimed, prefix
+
+
 # ---------- Internal benchmark (Heresy #9 — informational only) ----------
 
 BENCHMARK_MIN_HISTORY = 3       # total user quotes required before any benchmark shows
@@ -537,7 +644,9 @@ def register():
         db.session.add(user)
         db.session.commit()
 
-        ensure_default_profiles_for_user(user)
+        # BUG-003 (Sprint 4): new users no longer get auto-seeded starter
+        # profiles. The first hit to "/" redirects them into /profiles/new
+        # so the first profile creation IS the onboarding step.
         verify_url = url_for("verify_email", token=token, _external=True)
         app.logger.info(
             "[EMAIL-VERIFICATION] new user %s — verify URL: %s", email, verify_url,
@@ -600,7 +709,8 @@ def login():
         user.locked_until = None
         db.session.commit()
 
-        ensure_default_profiles_for_user(user)
+        # BUG-003 (Sprint 4): no auto-seed at login either. Users without
+        # any profiles get bounced to /profiles/new by the index route.
         login_user(user)
         from flask import session as _session
         _session.permanent = True
@@ -643,8 +753,23 @@ def logout():
 @login_required
 def index():
     registry, profiles = get_user_profile_registry(current_user)
-    current_profile_data = registry["profiles"].get(registry["active_profile"], {})
 
+    # BUG-003 (Sprint 4): zero-profile users get bounced to /profiles/new.
+    # Pre-Sprint-4, signup auto-seeded a "starter" profile so the quote
+    # form always had something to render. Since new users no longer get
+    # any seeded profiles, the first profile creation IS the onboarding —
+    # users land on the profile form before they can quote, with their own
+    # rates rather than placeholder rates that would have led to bad first
+    # quotes anyway. Existing users with profiles see no behavior change.
+    if not profiles:
+        flash(
+            "Welcome — let's set up your first pricing profile. "
+            "Once it's saved you'll be quoting in seconds.",
+            "info",
+        )
+        return redirect(url_for("profile_new"))
+
+    current_profile_data = registry["profiles"].get(registry["active_profile"], {})
     return render_template(
         "index.html",
         profiles=[p.name for p in profiles],
@@ -843,7 +968,7 @@ def generate():
         # ?type=INVOICE.
         doc_type = "QUOTE"
         filename = f"{doc_type.lower()}_{uuid.uuid4().hex[:6]}.pdf"
-        output_path = os.path.join(project_root, filename)
+        output_path = os.path.join(_user_pdf_dir(current_user.id), filename)
         label = sanitize_label(data.get("label"))
         customer_name = _sanitize_storage(data.get("customer_name"), CUSTOMER_NAME_MAX)
         customer_address = _sanitize_storage(data.get("customer_address"), CUSTOMER_ADDR_MAX)
@@ -869,6 +994,13 @@ def generate():
         db.session.add(quote)
         db.session.flush()
 
+        # BUG-007 (Sprint 4): claim the sequential Q-NNNNNN before render.
+        # Pattern mirrors the existing invoice claim — atomic UPDATE on
+        # User.next_quote_number, snapshot prefix onto Quote.quote_prefix.
+        # Done after the flush so quote.id exists; done before render so the
+        # PDF carries the number on the first emit (no follow-up commits).
+        q_num, q_prefix = _claim_quote_number(quote)
+
         generate_document(
             snapshot,
             doc_type=doc_type,
@@ -877,6 +1009,8 @@ def generate():
             phone_number=current_user.phone_number,
             label=label,
             doc_code=derive_doc_code(quote.id),
+            quote_number=q_num,
+            quote_prefix=q_prefix,
             quote_footer=render_footer_template(
                 current_user.quote_footer_text, "QUOTE", current_user.phone_number,
             ),
@@ -919,11 +1053,21 @@ def generate():
             Quote.user_id == user.id,
             Quote.created_at >= period_start,
         ).count()
-        notice = build_soft_cap_notice(
-            quote_count, config.SOFT_CAP_THRESHOLD, url_for("contact"),
-        )
-        if notice:
-            response["soft_cap_notice"] = notice
+        # Two tiers (Sprint 4 T1):
+        #   80%-99%  -> soft_cap_warning   (heads-up, no CTA)
+        #   >=100%   -> soft_cap_notice    (full CTA pointing at /contact)
+        # Mutually exclusive by construction (build_soft_cap_warning returns
+        # None at >= threshold), but checking warning first means a single
+        # response never carries both.
+        warning = build_soft_cap_warning(quote_count, config.SOFT_CAP_THRESHOLD)
+        if warning:
+            response["soft_cap_warning"] = warning
+        else:
+            notice = build_soft_cap_notice(
+                quote_count, config.SOFT_CAP_THRESHOLD, url_for("contact"),
+            )
+            if notice:
+                response["soft_cap_notice"] = notice
 
     return jsonify(response)
 
@@ -931,8 +1075,27 @@ def generate():
 @app.route("/download/<filename>")
 @login_required
 def download(filename):
+    """
+    Serve a generated PDF from the caller's per-user bucket.
+
+    BUG-008 fix (Sprint 4): pre-fix, this route served any file in
+    project_root by name — `sovereign.db`, source files, anything. The
+    fix pins lookups to <OUTPUT_DIR>/<current_user.id>/<basename>:
+
+      - basename() strips path traversal (`..`, leading slash)
+      - the user_id comes from the session, not the URL, so a leaked
+        filename from user A is unreachable when user B is logged in
+      - the bucket directory only ever contains PDFs this user generated,
+        so even an exact filename match can't escape sandbox
+
+    404 (not 403) on miss — don't leak whether the filename exists for
+    another user.
+    """
     safe_name = os.path.basename(filename)
-    return send_file(os.path.join(project_root, safe_name), as_attachment=True)
+    full_path = os.path.join(_user_pdf_dir(current_user.id), safe_name)
+    if not os.path.isfile(full_path):
+        abort(404)
+    return send_file(full_path, as_attachment=True)
 
 
 # ---------- Profile CRUD ----------
@@ -1115,7 +1278,7 @@ def quote_render_pdf(quote_id):
 
     snapshot = load_quote_snapshot(q)
     filename = f"{doc_type.lower()}_{uuid.uuid4().hex[:6]}.pdf"
-    output_path = os.path.join(project_root, filename)
+    output_path = os.path.join(_user_pdf_dir(current_user.id), filename)
 
     # Sequential number for INVOICE only (Feature 2). QUOTE keeps the
     # opaque hash from derive_doc_code — quotes aren't legally binding,
@@ -1139,6 +1302,12 @@ def quote_render_pdf(quote_id):
             # legacy invoices issued before Feature 3, q.invoice_prefix
             # is null and the generator falls back to INVOICE_PREFIX_DEFAULT.
             invoice_prefix=q.invoice_prefix,
+            # BUG-007 (Sprint 4): pass the snapshotted quote number so
+            # QUOTE re-renders show the same Q-NNNNNN they had on first
+            # emit. Pre-Sprint-4 quotes have q.quote_number=None and the
+            # generator falls back to the legacy doc_code hash for them.
+            quote_number=q.quote_number,
+            quote_prefix=q.quote_prefix,
             quote_footer=render_footer_template(
                 current_user.quote_footer_text, "QUOTE", current_user.phone_number,
             ),

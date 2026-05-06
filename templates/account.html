@@ -144,6 +144,12 @@
                     <div><span class="font-medium">Email:</span> {{ current_user.email }}</div>
                     <div class="mt-1"><span class="font-medium">Credits:</span> {{ current_user.credit_balance }}</div>
                 </div>
+                {# Sprint 4 T5: dedicated "need help" affordance on the account
+                   page. Email pulled from the inject_support_email context
+                   processor — same source as the footer and error pages. #}
+                <div class="text-sm text-slate-500 mt-3">
+                    Need help? Contact <a href="mailto:{{ support_email }}" class="text-blue-600 hover:underline">{{ support_email }}</a>.
+                </div>
             </div>
 
             <div class="flex gap-3 pt-3 border-t border-slate-100">
@@ -152,5 +158,6 @@
             </div>
         </form>
     </main>
+    {% include "_footer.html" %}
 </body>
 </html>

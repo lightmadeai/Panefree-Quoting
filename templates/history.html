@@ -41,14 +41,21 @@
                         <td class="px-6 py-4">
                             <div class="flex items-center gap-2 flex-wrap">
                                 <span class="font-medium">{{ q.label or '(untitled)' }}</span>
-                                {# Show the claimed invoice number once a quote has been
-                                   converted to an invoice (Feature 2). Null until first
-                                   conversion. Format mirrors generator.py's title format
-                                   so users see the same identifier string everywhere.
-                                   Prefix is the per-quote snapshot from claim time
-                                   (Feature 3); legacy invoices issued before Feature 3
-                                   have q.invoice_prefix=None and fall back to "INV-"
-                                   to match what the generator renders for them. #}
+                                {# Sequential quote number (BUG-007, Sprint 4). Pre-Sprint-4
+                                   rows have q.quote_number=None — those don't render a
+                                   badge here, matching the generator's hash-fallback
+                                   behavior on the PDF side. Prefix is the per-quote
+                                   snapshot from claim time so a later quote_prefix change
+                                   doesn't retroactively rename existing rows. #}
+                                {% if q.quote_number %}
+                                <span class="mono text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                                    {{ q.quote_prefix if q.quote_prefix is not none else 'Q-' }}{{ "%06d"|format(q.quote_number) }}
+                                </span>
+                                {% endif %}
+                                {# Invoice number (Feature 2/3): only present if this quote
+                                   has been rendered as an INVOICE at least once. Shown
+                                   alongside the quote number so the customer-facing chain
+                                   reads "Q-000003 → INV-000001" at a glance. #}
                                 {% if q.invoice_number %}
                                 <span class="mono text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
                                     {{ q.invoice_prefix if q.invoice_prefix is not none else 'INV-' }}{{ "%06d"|format(q.invoice_number) }}

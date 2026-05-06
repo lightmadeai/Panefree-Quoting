@@ -70,6 +70,14 @@ class User(UserMixin, db.Model):
     # — legal-identifier stability matters more than display consistency
     # across a prefix change. Validation lives in app.sanitize_invoice_prefix.
     invoice_prefix = db.Column(db.Text, nullable=False, default="INV-")
+    # Per-user sequential quote counter (BUG-007, Sprint 4). Bumped via the
+    # same pattern as next_invoice_number — atomic UPDATE in
+    # _claim_quote_number, snapshotted onto Quote.quote_number at /generate.
+    next_quote_number = db.Column(db.Integer, nullable=False, default=1)
+    # Per-user quote prefix (BUG-007). Default 'Q-' so users who never
+    # customize get the standard Q-NNNNNN format. Snapshotted at claim time
+    # for stability across later prefix changes.
+    quote_prefix = db.Column(db.Text, nullable=False, default="Q-")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     transactions = db.relationship("Transaction", backref="user", lazy=True)
@@ -157,6 +165,13 @@ class Quote(db.Model):
     # the user later changes their account setting. This is the legal
     # invariant that makes invoice IDs stable across a prefix change.
     invoice_prefix = db.Column(db.Text, nullable=True)
+    # Sequential quote number (BUG-007, Sprint 4). Claimed at /generate time
+    # for new quotes; null for pre-Sprint-4 quotes (the generator falls back
+    # to the legacy hash code for those, so re-renders stay stable).
+    quote_number = db.Column(db.Integer, nullable=True)
+    # Snapshot of User.quote_prefix at claim time (BUG-007). Once set, never
+    # changes — same stability invariant as invoice_prefix.
+    quote_prefix = db.Column(db.Text, nullable=True)
     # Full input+calculation snapshot. Decimal values are stored as strings
     # inside this JSON so rehydration is lossless (Heresy #11).
     quote_data = db.Column(db.JSON, nullable=False)

@@ -25,7 +25,7 @@
                 <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
                     <h2 class="text-xl font-semibold mb-6">Job Configuration</h2>
                     
-                    <form action="/calculate" method="POST" class="space-y-6">
+                    <form id="quote-form" action="/calculate" method="POST" class="space-y-6">
                     <div class="space-y-2">
                         <label class="block text-sm font-bold text-slate-500 uppercase tracking-wider">Customer / Job Name</label>
                         <input type="text" name="label" maxlength="80" value="{{ submitted_label or '' }}"
@@ -185,6 +185,87 @@
                     </div>
 
                     <script id="profiles-data" type="application/json">{{ profiles_data | tojson }}</script>
+                    <script>
+                    // BUG-004 (Sprint 4): persist quote-form state across navigation
+                    // so a user who runs out of credits mid-fill can buy more and
+                    // return without re-entering everything.
+                    //
+                    //   save:    on every input change (named fields + checked addons)
+                    //   restore: on DOMContentLoaded, only if no server-rendered values
+                    //            are present (server values take precedence — they're
+                    //            from a fresh /calculate post)
+                    //   clear:   after a successful /generate response (the credit was
+                    //            spent, the form data has been used)
+                    //
+                    // Storage is sessionStorage scoped to a single key so it's wiped
+                    // when the browser/tab closes — no cross-session bleed.
+                    (function () {
+                        const KEY = 'pf_quote_draft_v1';
+                        const form = document.getElementById('quote-form');
+                        if (!form) return;
+                        // Server-rendered "submitted_*" values mean the user just hit
+                        // /calculate and got the preview — don't clobber that with a
+                        // stale draft from sessionStorage.
+                        const labelEl = form.querySelector('[name="label"]');
+                        const serverHasValues = !!(labelEl && labelEl.value);
+
+                        function snapshot() {
+                            const data = { fields: {}, addons: [] };
+                            form.querySelectorAll('input[name], select[name], textarea[name]').forEach(el => {
+                                if (el.type === 'checkbox') {
+                                    if (el.name === 'addon' && el.checked) data.addons.push(el.value);
+                                } else if (el.type === 'submit' || el.type === 'button') {
+                                    /* skip */
+                                } else {
+                                    data.fields[el.name] = el.value;
+                                }
+                            });
+                            return data;
+                        }
+                        function save() {
+                            try { sessionStorage.setItem(KEY, JSON.stringify(snapshot())); } catch (e) {}
+                        }
+                        function restore() {
+                            let raw;
+                            try { raw = sessionStorage.getItem(KEY); } catch (e) { return; }
+                            if (!raw) return;
+                            let data; try { data = JSON.parse(raw); } catch (e) { return; }
+                            if (!data || typeof data !== 'object') return;
+                            Object.entries(data.fields || {}).forEach(([name, v]) => {
+                                const el = form.querySelector(`[name="${CSS.escape(name)}"]`);
+                                if (el && (el.type !== 'checkbox') && el.value === '') el.value = v;
+                            });
+                            (data.addons || []).forEach(value => {
+                                const el = form.querySelector(`input[name="addon"][value="${CSS.escape(value)}"]`);
+                                if (el) el.checked = true;
+                            });
+                            // Re-fire change on the profile select so populateRates re-runs
+                            const sel = form.querySelector('[name="profile_id"]');
+                            if (sel) sel.dispatchEvent(new Event('change'));
+                        }
+                        function clearDraft() {
+                            try { sessionStorage.removeItem(KEY); } catch (e) {}
+                        }
+
+                        // Expose the clearer so the /generate success handler can call it.
+                        window.__clearQuoteDraft = clearDraft;
+
+                        // Save on any input change. Debounced lightly — typing fires a
+                        // lot of events, no need to thrash sessionStorage on every keystroke.
+                        let t = null;
+                        form.addEventListener('input', () => { clearTimeout(t); t = setTimeout(save, 200); });
+                        form.addEventListener('change', save);
+
+                        if (!serverHasValues) {
+                            // Defer to DOMContentLoaded if we got here before parse finished.
+                            if (document.readyState === 'loading') {
+                                document.addEventListener('DOMContentLoaded', restore);
+                            } else {
+                                restore();
+                            }
+                        }
+                    })();
+                    </script>
                     <script>
                     (function () {
                         const profilesData = JSON.parse(document.getElementById('profiles-data').textContent);
@@ -564,6 +645,9 @@
 
                                     badge.textContent = data.credits_remaining + ' credits';
                                     label.textContent = 'Downloading…';
+                                    // BUG-004: quote was generated successfully — wipe the
+                                    // saved draft so the user gets a fresh form on return.
+                                    if (typeof window.__clearQuoteDraft === 'function') window.__clearQuoteDraft();
                                     window.location.href = data.download_url;
 
                                     generatedQuoteId = data.quote_id;

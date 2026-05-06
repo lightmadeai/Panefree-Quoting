@@ -68,12 +68,12 @@ if config.STRIPE_SECRET_KEY:
 
 @login_manager.user_loader
 def load_user(user_id):
-    user = db.session.get(User, int(user_id))
-    # Idempotent — no-op once profiles exist. Protects users whose session
-    # predates Sprint 2 (registered before profile seeding was added).
-    if user:
-        ensure_default_profiles_for_user(user)
-    return user
+    # BUG-003 (Sprint 4): no longer auto-seeds starter profiles. New users
+    # are routed through /profiles/new via the index redirect — they own
+    # the act of creating their first profile, which doubles as onboarding.
+    # Existing users keep whatever profiles they already have; only the
+    # auto-seed for an empty profile table was removed.
+    return db.session.get(User, int(user_id))
 
 
 def _ensure_table_columns(table_name, additions):
@@ -133,6 +133,19 @@ with app.app_context():
         # Per-user invoice prefix (Feature 3). DEFAULT 'INV-' preserves the
         # original Feature 2 hardcoded behavior for users who never customize.
         ("invoice_prefix", "TEXT NOT NULL DEFAULT 'INV-'"),
+        # Per-user sequential quote counter (BUG-007, Sprint 4). Mirrors
+        # next_invoice_number — the counter sits on User, claimed once at
+        # /generate time and snapshotted onto Quote.quote_number. Default 1
+        # so the first quote a user generates renders as Q-000001. Existing
+        # users get the column with default 1; their pre-Sprint-4 quotes
+        # show the legacy hash code as before (since Quote.quote_number
+        # remains NULL for those rows).
+        ("next_quote_number", "INTEGER NOT NULL DEFAULT 1"),
+        # Per-user quote prefix (BUG-007). Default 'Q-' is the same kind of
+        # back-compat default invoice_prefix uses. Snapshotted onto Quote
+        # at claim time so a later prefix change doesn't retroactively
+        # rename existing quotes — same stability rule as invoices.
+        ("quote_prefix", "TEXT NOT NULL DEFAULT 'Q-'"),
         # Subscription columns. UNIQUE on subscription_id is created as a
         # separate index below — SQLite's ALTER TABLE ADD COLUMN cannot
         # apply UNIQUE in-place. All three are nullable: existing users
@@ -182,6 +195,15 @@ with app.app_context():
         # (those fall back to "INV-" via the generator default — see
         # generator.generate_document). Once set, never changes.
         ("invoice_prefix", "TEXT"),
+        # Sequential quote number (BUG-007, Sprint 4). Claimed once at
+        # /generate time; mirrors invoice_number's lifecycle on the quote
+        # side. Nullable for back-compat: pre-Sprint-4 quotes have NULL
+        # here and the generator falls back to the legacy hash doc_code
+        # so old PDFs re-render with the same identifier they had before.
+        ("quote_number", "INTEGER"),
+        # Snapshot of User.quote_prefix at claim time (BUG-007). Same
+        # stability invariant as invoice_prefix: once set, never changes.
+        ("quote_prefix", "TEXT"),
     ])
     _ensure_starting_credit_floor()
     _backfill_email_verified()
@@ -460,6 +482,42 @@ def _claim_invoice_number(quote):
     return claimed
 
 
+def _claim_quote_number(quote):
+    """
+    Atomically claim the next sequential quote number for this quote's owner
+    and persist it on the Quote row. Same atomic-UPDATE pattern as
+    _claim_invoice_number — bump first, read back, snapshot prefix.
+
+    Quote numbers are NOT a legal/tax compliance artifact (only invoice
+    numbers are), but we apply the same gap-aware semantics for consistency
+    and so that "Q-000004" reads naturally to a customer whose previous
+    quote was Q-000003. Idempotent: if the quote already has a number,
+    return it. Failure semantics mirror the invoice path: claim is kept
+    even if downstream PDF render fails (we'd rather see a gap than reuse
+    a number).
+    """
+    if quote.quote_number is not None:
+        return quote.quote_number, quote.quote_prefix or "Q-"
+
+    db.session.execute(
+        text("UPDATE users SET next_quote_number = next_quote_number + 1 "
+             "WHERE id = :uid"),
+        {"uid": quote.user_id},
+    )
+    row = db.session.execute(
+        text("SELECT next_quote_number, quote_prefix FROM users "
+             "WHERE id = :uid"),
+        {"uid": quote.user_id},
+    ).first()
+    claimed = row[0] - 1
+    prefix = row[1] if row[1] is not None else "Q-"
+
+    quote.quote_number = claimed
+    quote.quote_prefix = prefix
+    db.session.commit()
+    return claimed, prefix
+
+
 # ---------- Internal benchmark (Heresy #9 — informational only) ----------
 
 BENCHMARK_MIN_HISTORY = 3       # total user quotes required before any benchmark shows
@@ -554,7 +612,9 @@ def register():
         db.session.add(user)
         db.session.commit()
 
-        ensure_default_profiles_for_user(user)
+        # BUG-003 (Sprint 4): new users no longer get auto-seeded starter
+        # profiles. The first hit to "/" redirects them into /profiles/new
+        # so the first profile creation IS the onboarding step.
         verify_url = url_for("verify_email", token=token, _external=True)
         app.logger.info(
             "[EMAIL-VERIFICATION] new user %s — verify URL: %s", email, verify_url,
@@ -617,7 +677,8 @@ def login():
         user.locked_until = None
         db.session.commit()
 
-        ensure_default_profiles_for_user(user)
+        # BUG-003 (Sprint 4): no auto-seed at login either. Users without
+        # any profiles get bounced to /profiles/new by the index route.
         login_user(user)
         from flask import session as _session
         _session.permanent = True
@@ -660,8 +721,23 @@ def logout():
 @login_required
 def index():
     registry, profiles = get_user_profile_registry(current_user)
-    current_profile_data = registry["profiles"].get(registry["active_profile"], {})
 
+    # BUG-003 (Sprint 4): zero-profile users get bounced to /profiles/new.
+    # Pre-Sprint-4, signup auto-seeded a "starter" profile so the quote
+    # form always had something to render. Since new users no longer get
+    # any seeded profiles, the first profile creation IS the onboarding —
+    # users land on the profile form before they can quote, with their own
+    # rates rather than placeholder rates that would have led to bad first
+    # quotes anyway. Existing users with profiles see no behavior change.
+    if not profiles:
+        flash(
+            "Welcome — let's set up your first pricing profile. "
+            "Once it's saved you'll be quoting in seconds.",
+            "info",
+        )
+        return redirect(url_for("profile_new"))
+
+    current_profile_data = registry["profiles"].get(registry["active_profile"], {})
     return render_template(
         "index.html",
         profiles=[p.name for p in profiles],
@@ -886,6 +962,13 @@ def generate():
         db.session.add(quote)
         db.session.flush()
 
+        # BUG-007 (Sprint 4): claim the sequential Q-NNNNNN before render.
+        # Pattern mirrors the existing invoice claim — atomic UPDATE on
+        # User.next_quote_number, snapshot prefix onto Quote.quote_prefix.
+        # Done after the flush so quote.id exists; done before render so the
+        # PDF carries the number on the first emit (no follow-up commits).
+        q_num, q_prefix = _claim_quote_number(quote)
+
         generate_document(
             snapshot,
             doc_type=doc_type,
@@ -894,6 +977,8 @@ def generate():
             phone_number=current_user.phone_number,
             label=label,
             doc_code=derive_doc_code(quote.id),
+            quote_number=q_num,
+            quote_prefix=q_prefix,
             quote_footer=render_footer_template(
                 current_user.quote_footer_text, "QUOTE", current_user.phone_number,
             ),
@@ -1185,6 +1270,12 @@ def quote_render_pdf(quote_id):
             # legacy invoices issued before Feature 3, q.invoice_prefix
             # is null and the generator falls back to INVOICE_PREFIX_DEFAULT.
             invoice_prefix=q.invoice_prefix,
+            # BUG-007 (Sprint 4): pass the snapshotted quote number so
+            # QUOTE re-renders show the same Q-NNNNNN they had on first
+            # emit. Pre-Sprint-4 quotes have q.quote_number=None and the
+            # generator falls back to the legacy doc_code hash for them.
+            quote_number=q.quote_number,
+            quote_prefix=q.quote_prefix,
             quote_footer=render_footer_template(
                 current_user.quote_footer_text, "QUOTE", current_user.phone_number,
             ),

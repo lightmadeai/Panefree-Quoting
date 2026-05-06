@@ -97,7 +97,8 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
                       doc_code=None, quote_footer=None, invoice_footer=None,
                       customer_name=None, customer_address=None,
                       customer_email=None, customer_phone=None,
-                      invoice_number=None, invoice_prefix=None):
+                      invoice_number=None, invoice_prefix=None,
+                      quote_number=None, quote_prefix=None):
     """
     Generates a professional PDF based on a quote snapshot.
     This is a PURE VIEW. No calculations are performed here.
@@ -158,6 +159,14 @@ def generate_document(snapshot, doc_type="QUOTE", output_path="output.pdf",
         # crash FPDF mid-render (Heresy #10 second layer).
         prefix = _sanitize_text(prefix, INVOICE_PREFIX_MAX)
         doc_title = f"INVOICE #{prefix}{invoice_number:06d}"
+    elif doc_type == "QUOTE" and quote_number is not None:
+        # BUG-007 fix (Sprint 4): quotes now get a sequential Q-NNNNNN
+        # display number too, matching invoices. Pre-Sprint-4 quotes have
+        # quote_number=None and fall through to the legacy doc_code hash —
+        # so re-renders of old PDFs keep their original identifier.
+        qprefix = quote_prefix if quote_prefix is not None else "Q-"
+        qprefix = _sanitize_text(qprefix, INVOICE_PREFIX_MAX)
+        doc_title = f"QUOTE #{qprefix}{quote_number:06d}"
     else:
         doc_title = f"{doc_type} #{code}"
     pdf.cell(0, 10, doc_title, ln=True, align="R")

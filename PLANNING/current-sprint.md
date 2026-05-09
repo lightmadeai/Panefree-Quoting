@@ -1,27 +1,29 @@
 ---
-sprint: 4
+label: hotfix-1
 project: window-quoting
+phase: stabilize
 drafted_by: Jade
-status: done
-created: 2026-05-05
-depends_on: sprint-3-completion
+status: in-progress
+created: 2026-05-06
 audit_status: approved
-redirected: true
-redirected_reason: "Original Sprint 4 was overweight with operational tasks that Claude cannot verify. Redrafted into Sprint 4 (code-side) and Sprint 5 (deployment cutover). Rebalanced 2026-05-06: T1 split into critical fixes + UX fixes, T4/T5 merged into docs + polish."
+audit_note: "Inquisitor pre-audit verdict CONDITIONAL PASS (audits/hotfix-1-pre-audit.md, 2026-05-07) — 5 non-blocking remarks, no blockers. Status flipped from pending → approved by Claude on execution start."
 ---
 
-# Sprint 4 — Code-Side Ship Readiness
+# Hotfix-1 — Email Verification + Deployment Polish
 
-**Full manifest:** `PLANNING/sprints/SPRINT_4_MANIFEST.md`
+**Full manifest:** `PLANNING/sprints/HOTFIX_1_MANIFEST.md`
 
 ## Tasks (Summary)
-- **T1: Critical Security + Core Bug Fixes** — BUG-008 (P0 file download), BUG-006 (Custom Rate), BUG-002 (credit copy), soft-cap frontend removal, 80% warning tier
-- **T2: UX Flow Fixes** — BUG-003 (starter profiles/redirect), BUG-004 (form persistence), BUG-007 (sequential quote IDs)
-- **T3: Programmatic Stress Test + Verification** — Re-run probe, verify all T1/T2 fixes, create stress-test-results.md
-- **T4: Deployment Documentation + Environment Templates** — DEPLOYMENT.md, .env.example, schema parity docs
-- **T5: Final Polish + Release Documentation** — Debug cleanup, SUPPORT_EMAIL, contact email, RELEASE_NOTES, CHANGELOG
+- **T1:** Verify email verification gate (BUG-005 re-test)
+- **T2:** Session lifetime hardening — 7-day max (OBS-003)
+- **T3:** Legacy PDF migration script + output directory docs (Inquisitor R1/R2)
+- **T4:** Input sanitization audit (BUG-009 follow-up)
+- **T5:** Credit refund atomicity (OBS-002)
+
+## Phase
+Stabilize — backlog items pulled from `PLANNING/backlog.md`
 
 ## Key References
-- Bug findings: `PLANNING/notes/sprint-4-notes.md`
-- Post-audit verdict: CONTESTED (zero code changes applied — this sprint has not been executed yet)
-- Sprint 3 merge: commit `0e43594`
+- Sprint 4 notes: `PLANNING/notes/sprint-4-notes.md`
+- Sprint 4 post-audit: CONTESTED (1st), PASSED (2nd)
+- Branch from master (Sprint 4 merge)

@@ -204,12 +204,51 @@ When adding a new project to the sprint pipeline:
 
 ---
 
+## 13. Build & Stabilize Phases
+
+Projects operate in one of two phases, each with its own sprint format:
+
+### Build Phase
+- Used when scope is known ahead of time (new features, major additions)
+- Sprints are numbered (`sprint-N`) and pre-drafted in `drafts/sprint-N.md`
+- Follows the full lifecycle in §2 (draft → pre-audit → promote → execute → post-audit)
+- `next_sprint` counter increments on promotion
+
+### Stabilize Phase
+- Used when scope is reactive (bug fixes, hardening, deployment prep after a build phase)
+- Instead of pre-drafted manifests, a **`backlog.md`** tracks all outstanding items by priority:
+  - **P0** — Blockers (ship-stoppers)
+  - **P1** — Must-fix before launch
+  - **P2** — Should-fix
+  - **P3** — Defense-in-depth / nice-to-have
+  - **Ops** — Deployment/infrastructure tasks (only pulled after P0/P1 are clear)
+- Sprints are labeled `hotfix-N` (sequential) and composed just-in-time:
+  1. Jade pulls top ≤5 items from `backlog.md` into `current-sprint.md`
+  2. Each item gets full acceptance criteria at pull time
+  3. Pre-audit still required (Inquisitor audits before Claude executes)
+  4. Post-audit same as Build Phase
+- `next_sprint` counter **pauses** during Stabilize — resumes when next Build Phase starts
+
+### Phase Transitions
+- **Build → Stabilize:** Declared by Chris or Jade when a build sprint completes and reactive bug-fixing begins. Inquisitor confirms.
+- **Stabilize → Build:** Declared when `backlog.md` has zero P0/P1 items. Project can either start a new build phase or ship. Inquisitor confirms.
+- Phase transitions are governance decisions — not implicit.
+
+### Backlog Review Cadence
+Jade reviews and reprioritizes `backlog.md` after each hotfix post-audit. New findings from testing or audits get added immediately.
+
+### Exit Criteria
+Stabilize phase ends when `backlog.md` has zero P0/P1 items. At that point, either:
+- Ship the product (deployment Ops items execute as a final hotfix or a Build Phase sprint)
+- Return to Build Phase for the next feature set
+
+---
+
 ## Sprint Counter
 
 `next_sprint: 5`
 
-<!-- Protocol v1.1 — 2026-05-02 — Canonical source at shared/PLANNING-PROTOCOL.md
-     v1.1: §4 adds CLAUDE.md role note; §10 adds registry path convention.
-     Per Inquisitor verdict on Tooling Bundle Audit (2026-05-02). -->
+<!-- Protocol v1.2 — 2026-05-06 — Adds §13 Build & Stabilize Phases.
+     Per Inquisitor approval of Stabilization Phase amendment (2026-05-06). -->
 
-*(Jade increments this number when promoting a draft to `current-sprint.md`)*
+*(Jade increments this number when promoting a draft to `current-sprint.md` during Build Phase. Counter pauses during Stabilize Phase.)*

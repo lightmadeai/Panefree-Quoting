@@ -19,7 +19,7 @@
 ## Task progress
 - [x] T1: Email verification gate re-test — `testing/bug_005_verification_test.py` driver + `testing/bug-005-verification-test.md` report; 8/8 steps PASS (register→403→verify→200 path verified end-to-end)
 - [x] T2: Session lifetime → 7 days — `PERMANENT_SESSION_LIFETIME = timedelta(days=7)` moved into `config.py` (was hard-coded in `app.py` at 24h). `app.config.from_object(config)` picks it up. Both `/register` and `/login` carry an explicit `# DO NOT REMOVE` comment on `_session.permanent = True`. Verified: session cookie `Expires` is exactly 7 days after login (delta within ms tolerance).
-- [ ] T3: Legacy PDF migration script
+- [x] T3: Legacy PDF migration script — `scripts/migrate-pdfs.py` (idempotent, dry-run flag). Confirmed: 137 legacy PDFs at project root → `output/_legacy_unattributed/`; second run is a no-op. Path correction: code uses `OUTPUT_DIR/<user_id>/`, NOT `OUTPUT_DIR/quotes/<user_id>/` as manifest states (manifest wording is wrong; the BUG-008 fix in Sprint 4 set the actual layout). Migration script does NOT attribute to users — Quote table never persisted the rendered filename, so deterministic per-user mapping is impossible. DEPLOYMENT.md §2.5 added (output/ setup + migration script invocation), §2.6/2.7 renumbered. .gitignore already covered `output/` (line 17) and `*.bak` / `*.bak-*` (lines 25-26 from Sprint 4 commit) — no change needed.
 - [ ] T4: Input sanitization audit
 - [ ] T5: Credit refund atomicity
 

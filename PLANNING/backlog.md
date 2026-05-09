@@ -4,8 +4,8 @@ Last updated: 2026-05-06
 
 ## P2 — Should Fix Before Launch
 - [x] BUG-005: Re-test email verification gate now that SUPPORT_EMAIL is wired (T5 deliverable) — Hotfix-1 T1, see `testing/bug-005-verification-test.md`
-- [ ] Inquisitor R1: Legacy PDFs in `project_root/` will 404 after merge — write one-time migration script for any existing user PDFs
-- [ ] Inquisitor R2: Add `output/` directory setup step to DEPLOYMENT.md
+- [x] Inquisitor R1: Legacy PDFs in `project_root/` will 404 after merge — write one-time migration script for any existing user PDFs (Hotfix-1 T3, `scripts/migrate-pdfs.py`)
+- [x] Inquisitor R2: Add `output/` directory setup step to DEPLOYMENT.md (Hotfix-1 T3, §2.5)
 
 ## P3 — Defense-in-Depth
 - [ ] BUG-009: Garbage/oversized inputs stored raw in DB — confirm `sanitize_label` covers all entry points, add server-side length caps if gaps exist

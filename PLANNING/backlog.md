@@ -10,7 +10,7 @@ Last updated: 2026-05-06
 ## P3 — Defense-in-Depth
 - [ ] BUG-009: Garbage/oversized inputs stored raw in DB — confirm `sanitize_label` covers all entry points, add server-side length caps if gaps exist
 - [ ] OBS-002: Credit-refund non-atomic with quote rollback — add retry/comment on failed refund UPDATE
-- [ ] OBS-003: Session lifetime defaults to 31 days — set explicit `PERMANENT_SESSION_LIFETIME = timedelta(days=7)` in `config.py`
+- [x] OBS-003: Session lifetime defaults to 31 days — set explicit `PERMANENT_SESSION_LIFETIME = timedelta(days=7)` in `config.py` (Hotfix-1 T2; actual prior value was 24h in app.py, moved to config.py)
 
 ## Ops — Deployment Tasks (pull after P2s clear)
 - [ ] Live Stripe key swap (test → live)

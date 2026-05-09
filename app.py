@@ -51,10 +51,11 @@ app = Flask(__name__)
 app.config.from_object(config)
 app.secret_key = config.SECRET_KEY
 
-# Session timeout (T4). PERMANENT_SESSION_LIFETIME only takes effect when
-# `session.permanent = True` — set in load_user / login. After 24h of
-# idle, the cookie expires and the user is forced through /login again.
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=24)
+# Session timeout. PERMANENT_SESSION_LIFETIME comes in via from_object(config)
+# above (defined in config.py — Hotfix-1 T2 raised the cap from 24h to 7d).
+# Only takes effect when `session.permanent = True` — set in /register and
+# /login after a successful auth. After the configured idle window the
+# cookie expires and the user is forced through /login again.
 
 db.init_app(app)
 
@@ -652,7 +653,10 @@ def register():
             "[EMAIL-VERIFICATION] new user %s — verify URL: %s", email, verify_url,
         )
         login_user(user)
-        # Mark session permanent so PERMANENT_SESSION_LIFETIME applies.
+        # DO NOT REMOVE — required for PERMANENT_SESSION_LIFETIME to apply.
+        # Flask only honors the configured lifetime when session.permanent is
+        # True; without this, cookies fall back to browser-session scope and
+        # the 7-day cap (config.py) becomes a no-op.
         from flask import session as _session
         _session.permanent = True
         flash(
@@ -712,6 +716,8 @@ def login():
         # BUG-003 (Sprint 4): no auto-seed at login either. Users without
         # any profiles get bounced to /profiles/new by the index route.
         login_user(user)
+        # DO NOT REMOVE — required for PERMANENT_SESSION_LIFETIME to apply.
+        # See /register for the full rationale.
         from flask import session as _session
         _session.permanent = True
         return redirect(url_for("index"))

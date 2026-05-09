@@ -18,7 +18,7 @@
 
 ## Task progress
 - [x] T1: Email verification gate re-test — `testing/bug_005_verification_test.py` driver + `testing/bug-005-verification-test.md` report; 8/8 steps PASS (register→403→verify→200 path verified end-to-end)
-- [ ] T2: Session lifetime → 7 days
+- [x] T2: Session lifetime → 7 days — `PERMANENT_SESSION_LIFETIME = timedelta(days=7)` moved into `config.py` (was hard-coded in `app.py` at 24h). `app.config.from_object(config)` picks it up. Both `/register` and `/login` carry an explicit `# DO NOT REMOVE` comment on `_session.permanent = True`. Verified: session cookie `Expires` is exactly 7 days after login (delta within ms tolerance).
 - [ ] T3: Legacy PDF migration script
 - [ ] T4: Input sanitization audit
 - [ ] T5: Credit refund atomicity

@@ -1045,11 +1045,36 @@ def generate():
         db.session.rollback()
         if not is_subscriber:
             # Symmetric refund. Subscribers had nothing reserved, so skip.
-            db.session.execute(
-                text("UPDATE users SET credit_balance = credit_balance + 1 WHERE id = :uid"),
-                {"uid": current_user.id},
-            )
-            db.session.commit()
+            #
+            # Hotfix-1 T5 (OBS-002): wrap the refund itself in try/except so
+            # a failure here (DB lock, connection drop, disk full mid-commit,
+            # whatever) doesn't propagate up and 500 the caller. The user
+            # already paid the cost of a failed quote — they should not also
+            # eat a 500. The quote rollback above succeeded; the worst case
+            # if the refund silently fails is one missing credit, which is
+            # recoverable manually from the transactions table.
+            #
+            # Retry strategy: deliberately none. A single retry inside the
+            # request would block the response on the same flake; a queued
+            # retry is over-engineered for a credit count. We log loudly so
+            # ops can spot a pattern and credit-back from the audit trail.
+            try:
+                db.session.execute(
+                    text(
+                        "UPDATE users SET credit_balance = credit_balance + 1 "
+                        "WHERE id = :uid"
+                    ),
+                    {"uid": current_user.id},
+                )
+                db.session.commit()
+            except Exception as refund_err:
+                db.session.rollback()
+                app.logger.error(
+                    "[CREDIT-REFUND-FAILED] user_id=%s after /generate failure: "
+                    "original_error=%r refund_error=%r — credit may be lost; "
+                    "manual reconciliation required.",
+                    current_user.id, str(e), str(refund_err),
+                )
         return jsonify({"status": "error", "message": str(e)}), 400
 
     response = {

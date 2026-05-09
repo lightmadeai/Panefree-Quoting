@@ -8,7 +8,8 @@ Last updated: 2026-05-06
 - [x] Inquisitor R2: Add `output/` directory setup step to DEPLOYMENT.md (Hotfix-1 T3, §2.5)
 
 ## P3 — Defense-in-Depth
-- [ ] BUG-009: Garbage/oversized inputs stored raw in DB — confirm `sanitize_label` covers all entry points, add server-side length caps if gaps exist
+- [x] BUG-009: Garbage/oversized inputs stored raw in DB — confirm `sanitize_label` covers all entry points, add server-side length caps if gaps exist (Hotfix-1 T4; gaps closed at /account business_name+phone, /contact 4 fields, /profiles/new + /api/profiles/create name)
+- [ ] Pre-existing test failure: `test_sprint3_pipeline.TestContactIntake.test_soft_cap_cta_points_at_contact_route` returns 400 ("Invalid pricing profile: None") — test predates BUG-003 (Sprint 4) auto-seed removal, needs to seed a profile before /generate. Found while running regressions during Hotfix-1 T4. Not caused by hotfix changes.
 - [ ] OBS-002: Credit-refund non-atomic with quote rollback — add retry/comment on failed refund UPDATE
 - [x] OBS-003: Session lifetime defaults to 31 days — set explicit `PERMANENT_SESSION_LIFETIME = timedelta(days=7)` in `config.py` (Hotfix-1 T2; actual prior value was 24h in app.py, moved to config.py)
 

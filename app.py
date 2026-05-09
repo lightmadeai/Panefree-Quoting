@@ -332,6 +332,18 @@ CUSTOMER_NAME_MAX = 100
 CUSTOMER_ADDR_MAX = 200
 CUSTOMER_EMAIL_MAX = 254  # RFC 5321 max length
 CUSTOMER_PHONE_MAX = 30
+# Hotfix-1 T4 — caps for fields that previously had only `.strip()` and no
+# length bound, opening a small DOS / DB-bloat surface. Truncated silently
+# via _sanitize_storage (matches existing customer_* behavior). Sized to
+# accommodate realistic input plus generous slack — a real business name
+# never approaches 200 chars, but truncation at 200 still produces something
+# usable rather than rejecting the whole form.
+BUSINESS_NAME_MAX = 200
+PROFILE_NAME_MAX = LABEL_MAX_LEN          # profile labels follow the quote-label cap
+CONTACT_COMPANY_MAX = 200
+CONTACT_VOLUME_MAX = 200
+CONTACT_GROWTH_MAX = 2000                 # notes/description tier per spec
+CONTACT_EMAIL_MAX = CUSTOMER_EMAIL_MAX    # same RFC ceiling
 # Invoice prefix raw-input cap (Feature 3). One char less than the
 # stored INVOICE_PREFIX_MAX (=12) so sanitize_invoice_prefix can
 # auto-append a "-" without exceeding the column-level cap.
@@ -1118,7 +1130,9 @@ def profiles_list():
 def profile_new():
     if request.method == "POST":
         form = request.form
-        name = (form.get("name") or "").strip()
+        # Hotfix-1 T4: cap profile name at the label tier so a multi-MB
+        # name can't bloat the pricing_profiles table.
+        name = _sanitize_storage(form.get("name"), PROFILE_NAME_MAX)
 
         def render_form_with_error(msg):
             flash(msg, "error")
@@ -1181,7 +1195,8 @@ def profile_new():
 def api_profile_create():
     """JSON endpoint for inline profile creation from the quote form."""
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
+    # Hotfix-1 T4: cap as on the HTML route — same tier, same rationale.
+    name = _sanitize_storage(data.get("name"), PROFILE_NAME_MAX)
     price_data = data.get("price_data")
     make_default = bool(data.get("make_default"))
 
@@ -1519,10 +1534,14 @@ def contact():
     no email backend yet (deferred per Sprint 3 scope).
     """
     if request.method == "POST":
-        company_name = (request.form.get("company_name") or "").strip()
-        current_volume = (request.form.get("current_volume") or "").strip()
-        expected_growth = (request.form.get("expected_growth") or "").strip()
-        email = (request.form.get("email") or "").strip().lower()
+        # Hotfix-1 T4: cap each field at its tier (label/short/notes/email).
+        # Truncation is silent — the form has no per-field hint, so silently
+        # storing the first N chars beats rejecting outright and losing the
+        # rest of the submission.
+        company_name = _sanitize_storage(request.form.get("company_name"), CONTACT_COMPANY_MAX)
+        current_volume = _sanitize_storage(request.form.get("current_volume"), CONTACT_VOLUME_MAX)
+        expected_growth = _sanitize_storage(request.form.get("expected_growth"), CONTACT_GROWTH_MAX)
+        email = _sanitize_storage(request.form.get("email"), CONTACT_EMAIL_MAX).lower()
 
         # Field-by-field required check so the error names what's missing.
         missing = [name for name, v in [
@@ -1856,8 +1875,11 @@ def account():
             return redirect(url_for("account"))
 
         user = db.session.get(User, current_user.id)
-        business_name = (request.form.get("business_name") or "").strip()
-        phone_number = (request.form.get("phone_number") or "").strip()
+        # Hotfix-1 T4: cap before .strip() so a 50KB business_name can't sit
+        # in memory longer than necessary. _sanitize_storage handles both
+        # the trim and the cap.
+        business_name = _sanitize_storage(request.form.get("business_name"), BUSINESS_NAME_MAX)
+        phone_number = _sanitize_storage(request.form.get("phone_number"), CUSTOMER_PHONE_MAX)
         quote_footer = sanitize_footer(request.form.get("quote_footer_text"))
         invoice_footer = sanitize_footer(request.form.get("invoice_footer_text"))
         user.business_name = business_name or None

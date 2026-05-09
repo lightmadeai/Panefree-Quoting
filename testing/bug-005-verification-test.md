@@ -1,7 +1,7 @@
 # BUG-005 Re-Test — Email Verification Gate
 
 **Sprint:** Hotfix-1 (Stabilize Phase) — T1
-**Date:** 2026-05-09 02:38 UTC
+**Date:** 2026-05-09 02:49 UTC
 **Driver:** `testing/bug_005_verification_test.py`
 **Overall verdict:** **PASS ✅**
 
@@ -20,7 +20,7 @@
 ### ✅ Step 2: verification URL logged via [EMAIL-VERIFICATION]
 - **Expected:** log line containing the user's email + verify URL
 - **Actual:** found
-- **log_excerpt:** `[EMAIL-VERIFICATION] new user bug005-retest@hotfix1.local — verify URL: http://localhost/verify/7f552d4ae8fc424e8a3e320d392f38c6`
+- **log_excerpt:** `[EMAIL-VERIFICATION] new user bug005-retest@hotfix1.local — verify URL: http://localhost/verify/67c8d1022b044233ac0dbf494450ff42`
 
 ### ✅ Step 3: DB row created with email_verified=False + token present
 - **Expected:** email_verified=False, token=<32-hex>
@@ -45,7 +45,7 @@
 
 ### ✅ Step 8: POST /generate (verified, with profile) -> 200 success
 - **Expected:** status=200, body.status=success, file=quote_*.pdf
-- **Actual:** status=200, body.status=success, file=quote_3c16a9.pdf
+- **Actual:** status=200, body.status=success, file=quote_6de38d.pdf
 - **quote_id:** `1`
 - **credits_remaining:** `9`
 

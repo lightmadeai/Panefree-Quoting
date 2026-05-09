@@ -3,7 +3,7 @@
 Last updated: 2026-05-06
 
 ## P2 — Should Fix Before Launch
-- [ ] BUG-005: Re-test email verification gate now that SUPPORT_EMAIL is wired (T5 deliverable)
+- [x] BUG-005: Re-test email verification gate now that SUPPORT_EMAIL is wired (T5 deliverable) — Hotfix-1 T1, see `testing/bug-005-verification-test.md`
 - [ ] Inquisitor R1: Legacy PDFs in `project_root/` will 404 after merge — write one-time migration script for any existing user PDFs
 - [ ] Inquisitor R2: Add `output/` directory setup step to DEPLOYMENT.md
 

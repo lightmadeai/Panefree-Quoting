@@ -1,0 +1,3 @@
+[{{ alert_tag }}] {{ subject_summary }}
+
+{{ body_markdown }}

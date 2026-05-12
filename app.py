@@ -786,6 +786,36 @@ def _issue_verification_token(user):
     return token
 
 
+def _notify_admin(alert_tag, subject_summary, body_markdown):
+    """
+    Hotfix-3 T5: route an operational alert to ADMIN_EMAIL via the
+    same Postmark backend used for user-facing transactional mail.
+    Sites that call this also log structured tags (e.g. [CREDIT-REFUND-FAILED])
+    so the log + email are redundant — log for forensic depth, email so
+    the operator notices same-day instead of when they next tail the log.
+
+    Returns the mailer result (True/False) but callers SHOULD NOT branch
+    on it — admin alerts are best-effort by design; a failed alert send
+    must not cascade and break the primary flow (refund, delete, etc).
+    """
+    return mailer.send_email(
+        to=config.ADMIN_EMAIL,
+        subject=f"[{alert_tag}] {subject_summary}",
+        html_body=render_template(
+            "email/admin_alert.html",
+            alert_tag=alert_tag,
+            subject_summary=subject_summary,
+            body_markdown=body_markdown,
+        ),
+        text_body=render_template(
+            "email/admin_alert.txt",
+            alert_tag=alert_tag,
+            subject_summary=subject_summary,
+            body_markdown=body_markdown,
+        ),
+    )
+
+
 def _send_verification_email(user, token):
     """
     Send the email-verification message to `user`. Returns True on success,
@@ -1474,6 +1504,30 @@ def generate():
                     "manual reconciliation required.",
                     current_user.id, str(e), str(refund_err),
                 )
+                # Hotfix-3 T5: also email admin same-day so the manual
+                # reconciliation actually happens rather than waiting on
+                # someone tailing the log. Best-effort — failure here is
+                # logged via mailer's own [EMAIL-SEND-FAILED] tag but
+                # MUST NOT raise (we're already in an exception handler
+                # for the refund failure).
+                _notify_admin(
+                    alert_tag="CREDIT-REFUND-FAILED",
+                    subject_summary=f"Manual reconcile needed for user {current_user.id}",
+                    body_markdown=(
+                        f"User_id: {current_user.id}\n"
+                        f"Email: {current_user.email}\n"
+                        f"\n"
+                        f"The /generate path failed AND the credit refund\n"
+                        f"path also failed. The user has been charged a\n"
+                        f"credit for a quote they did not receive.\n"
+                        f"\n"
+                        f"Original error: {e!r}\n"
+                        f"Refund error:   {refund_err!r}\n"
+                        f"\n"
+                        f"Action: manually +1 credit_balance on user_id\n"
+                        f"  {current_user.id} via sqlite3 / admin tooling.\n"
+                    ),
+                )
         return jsonify({"status": "error", "message": str(e)}), 400
 
     response = {
@@ -2003,13 +2057,29 @@ def contact():
         db.session.add(sub)
         db.session.commit()
 
-        # Admin notification — structured log line until an email backend
-        # exists. Future sprint replaces this with real delivery.
+        # Hotfix-3 T5: admin notification via Postmark. Log line is still
+        # emitted as forensic backup — the email gives the operator
+        # same-day awareness so high-volume inquiries don't sit unread.
         app.logger.info(
             "[CONTACT-SUBMISSION] from user_id=%s (%s): company=%r, "
             "volume=%r, growth=%r, contact_email=%r",
             current_user.id, current_user.email,
             company_name, current_volume, expected_growth, email,
+        )
+        _notify_admin(
+            alert_tag="CONTACT-SUBMISSION",
+            subject_summary=f"Custom plan inquiry from {company_name}",
+            body_markdown=(
+                f"From user_id: {current_user.id}\n"
+                f"Account email: {current_user.email}\n"
+                f"Reply-to email: {email}\n"
+                f"\n"
+                f"Company: {company_name}\n"
+                f"Current volume: {current_volume}\n"
+                f"Expected growth: {expected_growth}\n"
+                f"\n"
+                f"Submitted at: {datetime.utcnow().isoformat()}Z\n"
+            ),
         )
 
         flash("Thanks — we'll be in touch shortly about your custom plan.", "success")
@@ -2394,7 +2464,24 @@ def account_delete():
                     "proceeding with delete; manual reconcile needed",
                     deleted_uid, sub_id, str(e),
                 )
-                # T5 will route this to ADMIN_EMAIL once the wiring is in.
+                _notify_admin(
+                    alert_tag="STRIPE-CANCEL-FAILED",
+                    subject_summary=f"Manual Stripe cancel needed for sub {sub_id}",
+                    body_markdown=(
+                        f"User_id (deleted): {deleted_uid}\n"
+                        f"Email (deleted):   {user.email}\n"
+                        f"Stripe sub_id:     {sub_id}\n"
+                        f"\n"
+                        f"The user has self-deleted their account, but the\n"
+                        f"Stripe subscription cancel API call failed:\n"
+                        f"  {e!r}\n"
+                        f"\n"
+                        f"Action: log in to Stripe Dashboard and cancel the\n"
+                        f"subscription manually. The user has no app account\n"
+                        f"anymore, so they cannot self-cancel via the\n"
+                        f"Billing Portal.\n"
+                    ),
+                )
 
         # Log out the session BEFORE deleting the row — Flask-Login
         # otherwise tries to load the (deleted) user on the next

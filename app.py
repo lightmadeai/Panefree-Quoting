@@ -20,10 +20,25 @@ def _user_pdf_dir(user_id):
     BUG-008 fix (Sprint 4): pre-fix, the download route served any file in
     project_root, exposing sovereign.db and source files to any logged-in
     user. Per-user buckets contain only PDFs that user has generated.
+
+    Hotfix-2 T3: directory mode locked to 0o700 (owner-only). The app user
+    is the only legitimate reader anyway — PDFs flow through /download,
+    which round-trips through Flask, not a static file server. Existing
+    dirs (pre-Hotfix-2) get tightened on first touch via the explicit
+    os.chmod below. On Windows the chmod is effectively a no-op (NTFS ACLs
+    own the actual permissions); the umask-default 0o777 there is fine
+    because the test environment isn't shared-host.
     """
     import config as _config
     d = os.path.join(_config.OUTPUT_DIR, str(int(user_id)))
-    os.makedirs(d, exist_ok=True)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except (OSError, NotImplementedError):
+        # Windows + some filesystems reject the chmod silently. The
+        # makedirs() mode flag already covers the create case; the chmod
+        # is a tightening pass for dirs created pre-Hotfix-2 on POSIX.
+        pass
     return d
 
 from flask import (
@@ -138,12 +153,29 @@ def load_user(user_id):
     return db.session.get(User, int(user_id))
 
 
+_SCHEMA_TABLE_ALLOWLIST = frozenset({"users", "quotes"})
+
+
 def _ensure_table_columns(table_name, additions):
     """
     SQLite lacks ALTER TABLE ... ADD COLUMN IF NOT EXISTS, and db.create_all()
     only creates missing tables — not missing columns. This runs once at boot
     and additively patches columns added after a table was first created.
+
+    Hotfix-2 T3 hardening: `table_name` is interpolated into raw SQL via
+    f-string (necessary — SQL parameter binding doesn't work for DDL
+    identifiers), so it MUST be an allowlisted constant. If a future
+    refactor turns this into a CLI tool or admin-facing helper, the
+    allowlist check below blocks SQLi at the helper boundary even if the
+    caller forgets to validate. Not user-reachable today; defense in depth
+    for tomorrow.
     """
+    if table_name not in _SCHEMA_TABLE_ALLOWLIST:
+        raise ValueError(
+            f"_ensure_table_columns: '{table_name}' not in allowlist "
+            f"{sorted(_SCHEMA_TABLE_ALLOWLIST)}. Refusing to interpolate "
+            f"unvetted identifier into DDL."
+        )
     existing = {row[1] for row in db.session.execute(text(f"PRAGMA table_info({table_name})")).fetchall()}
     for col, ddl in additions:
         if col not in existing:
@@ -640,9 +672,23 @@ def compute_internal_benchmark(user, current_pane_count, current_price):
 
 # ---------- Auth ----------
 
+PASSWORD_MAX_LEN = 128
+
+
 def _password_strength_error(password):
     """T4 password rules: ≥8 chars AND ≥1 digit. Returns the error message
-    to flash, or None if the password passes. Pure helper for testability."""
+    to flash, or None if the password passes. Pure helper for testability.
+
+    Hotfix-2 T3: upper-bounded at PASSWORD_MAX_LEN (128) to close the
+    pbkdf2 DoS surface. werkzeug.security uses 600k iterations of pbkdf2-
+    sha256; on a 4KB password that's a multi-second hash, which a single
+    attacker can use to saturate the auth path with a small number of
+    requests. 128 chars is well above any realistic human password
+    (longest in the haveibeenpwned dump of 600M is ~80) and well below
+    the DoS threshold. Rejecting (rather than truncating) is the safer
+    choice because truncation silently collides distinct passwords."""
+    if len(password) > PASSWORD_MAX_LEN:
+        return f"Password is too long (max {PASSWORD_MAX_LEN} characters)."
     if len(password) < 8:
         return "Password must be at least 8 characters long."
     if not any(c.isdigit() for c in password):

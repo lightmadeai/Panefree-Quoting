@@ -15,10 +15,12 @@ All configuration lives in `config.py` and reads from `os.environ` at boot. Copy
 | `STRIPE_PUBLISHABLE_KEY` | Live billing | `pk_live_...` in production. Surfaced to `top_up.html` for client-side Stripe.js. |
 | `STRIPE_WEBHOOK_SECRET` | Live billing | `whsec_...` from the Stripe Dashboard for the production endpoint. Required by `/webhook/stripe` for signature verification. |
 | `APP_BASE_URL` | Live billing | Externally-resolvable URL. Stripe `success_url` / `cancel_url` are built from this; misconfiguring it sends customers to localhost. |
-| `DEV_MODE` | Dev only | `1` / `true` / `yes` enables the `/dev/grant-credits` simulator. Hard-gated: simulator route 404s when `STRIPE_SECRET_KEY` is set, so leaving `DEV_MODE=1` in prod is non-fatal but should still be unset for hygiene. |
+| `DEV_MODE` | Dev only | `1` / `true` / `yes` enables the `/dev/grant-credits` simulator AND disables `SESSION_COOKIE_SECURE` + Talisman `force_https`/HSTS so plain-HTTP localhost works. Hard-gated: simulator route 404s when `STRIPE_SECRET_KEY` is set. **NEVER set in production** — it's the kill switch for three different prod-only protections. |
+| `WTF_CSRF_DISABLED` | Test only | `1` disables CSRF token enforcement so the existing `testing/stress_probe.py` + locust harness POSTs work without per-form token fetches. Loud `WARNING` logged at boot when set. **NEVER set in production.** |
+| `RATELIMIT_DISABLED` | Test only | `1` disables Flask-Limiter so locust can hammer `/login`/`/register` without tripping the IP gate. **NEVER set in production.** |
 | `SOFT_CAP_THRESHOLD` | Optional | Annual subscribers' soft-cap notice fires at this number of quotes per billing period. Default 1000. The 80% warning is computed from this value (`threshold * 8 // 10`). |
 | `SUPPORT_EMAIL` | Optional | Surface address for the contact CTA + footer. Default `support@windowquoting.com`. |
-| `RATE_LIMIT_QUOTES_PER_HOUR` | Optional | Free-tier rate limit per rolling 60-min window. Default 10. |
+| `RATE_LIMIT_QUOTES_PER_HOUR` | Optional | Free-tier quote-generation rate limit per rolling 60-min window. Default 10. Separate from the Hotfix-2 Flask-Limiter gates on auth routes. |
 
 ---
 
@@ -105,6 +107,38 @@ Sprint 4 T5 cleared these; re-grep before each deploy:
 ```bash
 grep -nrE "print\(|console\.log\(" --include="*.py" --include="*.html" --include="*.js" .
 ```
+
+### 2.8 Security headers + CSRF smoke (Hotfix-2 T2 + T4)
+
+Spin the app, log in, then hit a state-changing route without a CSRF token — Flask-WTF must reject it. The response headers from Talisman must be present:
+
+```bash
+# Start under production env (DEV_MODE unset)
+python -m gunicorn -b 127.0.0.1:5001 app:app &
+SERVER_PID=$!
+sleep 2
+
+# CSRF: form POST without token must 400
+curl -s -o /dev/null -w "POST /login (no csrf) -> %{http_code} (want 400)\n" \
+  -X POST -d "email=a@b.test&password=test1234" http://127.0.0.1:5001/login
+
+# Headers: CSP + HSTS + X-Frame + X-Content-Type + Referrer-Policy
+curl -sI http://127.0.0.1:5001/login | grep -iE \
+  "content-security-policy|strict-transport-security|x-frame-options|x-content-type-options|referrer-policy"
+
+kill $SERVER_PID
+```
+
+Expected: `400` on the CSRF probe, all five headers in the grep output. Missing CSP or HSTS is a deployment blocker — re-check `DEV_MODE` is unset and Talisman initialized.
+
+### 2.9 Dependency vulnerability scan
+
+```bash
+pip install pip-audit
+pip-audit --requirement requirements.txt
+```
+
+A clean run (no `WARN`/`FOUND VULNS`) is required to deploy. If pip-audit flags anything, bump the affected pin in `requirements.txt` and re-run.
 
 ---
 
@@ -201,13 +235,35 @@ The `output/<user_id>/` directories are append-only from the app's perspective; 
 
 ---
 
-## 8. Open items for Sprint 5
+## 8. WSGI server (Hotfix-2 §L4)
+
+**Never run `python app.py` in production.** The `if __name__ == "__main__":` block at the bottom of `app.py` calls `app.run(debug=True, ...)` which is single-threaded, leaks tracebacks to the client, and is explicitly documented by Flask as unsafe for production. Use gunicorn:
+
+```bash
+gunicorn --workers 4 --bind 127.0.0.1:5001 --access-logfile - --error-logfile - app:app
+```
+
+Behind a reverse proxy (nginx/Caddy), the proxy terminates TLS and passes `X-Forwarded-For` upstream. Flask-Limiter's IP-keyed buckets read `request.remote_addr`, which defaults to the proxy's IP — wrap the app with `werkzeug.middleware.proxy_fix.ProxyFix` so `X-Forwarded-For` is honored:
+
+```python
+# In app.py, after app = Flask(__name__):
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+```
+
+Without `ProxyFix`, every request looks like it came from the proxy's single IP — the rate limiter would gate the entire site on one global bucket. Configure `x_for=N` where N is the number of trusted proxies in front of the app (usually 1).
+
+---
+
+## 9. Open items for Sprint 5
 
 These are intentionally not in Sprint 4's scope:
 
 - Live Stripe key swap and real-card validation purchase
-- HTTPS enforcement (web server / reverse proxy config)
+- HTTPS enforcement (web server / reverse proxy config) — Talisman `force_https` already redirects, but the proxy needs the TLS termination + cert
 - Production monitoring / alerting (uptime, webhook failure rate, payment failure rate)
 - Versioned migrations (Alembic) — see "Schema parity" lesson above
 - Per-environment configuration files (test / staging / prod)
 - Database backup automation (currently manual)
+- Flask-Limiter Redis storage backend (currently `memory://` — won't share state across gunicorn workers; per-worker buckets are 4× more permissive than intended)
+- `werkzeug.middleware.proxy_fix.ProxyFix` wired in `app.py` (currently documented in §8 but not committed)

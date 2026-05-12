@@ -14,6 +14,23 @@ SQLALCHEMY_TRACK_MODIFICATIONS = False
 # don't get bounced mid-week. Tunable here only — do not redeclare in app.py.
 PERMANENT_SESSION_LIFETIME = timedelta(days=7)
 
+# Session cookie flags (Hotfix-2 T1). HTTPONLY blocks JS access to the
+# session cookie (XSS mitigation, defense in depth — autoescape already
+# blocks injection at the Jinja layer). SAMESITE=Lax blocks cross-site
+# POSTs from carrying the cookie, which is the cheap-and-effective CSRF
+# brake (Hotfix-2 T2 adds proper CSRF tokens on top). SECURE means the
+# cookie is only sent over HTTPS — required in prod, but breaks local dev
+# over plain http://127.0.0.1, so it's gated on DEV_MODE.
+#
+# IMPORTANT: do NOT set DEV_MODE=1 in production. The simulator route is
+# also gated on DEV_MODE, and turning it on would also disable the cookie
+# SECURE flag — both are "fail-loud-if-misconfigured" gates that share
+# the same kill switch.
+_DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SECURE = not _DEV_MODE
+
 # Generated PDFs live here, segregated by user ID. The download route
 # (BUG-008 fix, Sprint 4) only ever reads from <OUTPUT_DIR>/<current_user.id>/,
 # so a filename leaked to user A is unreachable as user B and the directory
@@ -35,7 +52,10 @@ APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:5001")
 # exposes a simulator that grants credits without Stripe. Both conditions
 # must hold — the simulator route 404s if Stripe keys are present, so a
 # real deployment can't accidentally expose it by forgetting to flip the flag.
-DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
+# Also disables SESSION_COOKIE_SECURE so local http://127.0.0.1 dev works
+# (see the SESSION_COOKIE_* block above). Mirror of _DEV_MODE for the
+# public-facing config.DEV_MODE name used by routes.
+DEV_MODE = _DEV_MODE
 
 # Credit packs — inline pricing, no pre-created Stripe Prices needed.
 # Per-quote economics (intentional ladder; high-volume users converge on

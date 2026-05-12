@@ -19,20 +19,57 @@ Probes:
   P16 BUG-008 fix: cross-tenant /download cannot reach another user's PDF
 """
 
-import os, sys, time, json, sqlite3, requests, secrets
+import os, sys, time, json, re, sqlite3, requests, secrets
 
 BASE = "http://127.0.0.1:5001"
 DB   = os.path.join(os.path.dirname(__file__), "..", "sovereign.db")
 
+# Hotfix-2 T2: Flask-WTF CSRF is on. Every form POST needs the token from
+# the prior GET page; AJAX/JSON POSTs send it via X-CSRFToken header. This
+# regex pulls the token out of the hidden input that every form renders.
+_CSRF_RE = re.compile(r'name="csrf_token"\s+value="([^"]+)"')
+
+
 def section(s):
     print(f"\n=== {s} ===")
+
+
+def _csrf(session, path):
+    """GET <path>, return (cookies_set_by_response, csrf_token) for the
+    subsequent POST. Token expires with the session, so callers should
+    grab it just-in-time rather than reusing across requests."""
+    r = session.get(f"{BASE}{path}")
+    m = _CSRF_RE.search(r.text)
+    if not m:
+        raise RuntimeError(f"no csrf_token on {path}: {r.status_code} {r.text[:200]}")
+    return m.group(1)
+
+
+def _ajax_headers(session):
+    """Return JSON+CSRF headers for AJAX-style POSTs. Calls / first so the
+    server hands us a CSRF cookie + token via the meta tag."""
+    r = session.get(f"{BASE}/")
+    m = re.search(r'name="csrf-token"\s+content="([^"]+)"', r.text)
+    if not m:
+        # Index might redirect to /profiles/new for new users — try there.
+        r = session.get(f"{BASE}/profiles/new")
+        m = re.search(r'name="csrf_token"\s+value="([^"]+)"', r.text)
+        if not m:
+            raise RuntimeError(f"no CSRF token reachable: {r.status_code}")
+    return {"Content-Type": "application/json", "X-CSRFToken": m.group(1)}
+
 
 def fresh_user_session(email_prefix="probe"):
     """Register a new user, return an authenticated requests.Session."""
     s = requests.Session()
     email = f"{email_prefix}_{secrets.token_hex(4)}@probe.test"
     pw    = "TestPassword!9999"
-    r = s.post(f"{BASE}/register", data={"email": email, "password": pw}, allow_redirects=True)
+    token = _csrf(s, "/register")
+    r = s.post(
+        f"{BASE}/register",
+        data={"email": email, "password": pw, "csrf_token": token},
+        allow_redirects=True,
+    )
     if r.status_code >= 400:
         raise RuntimeError(f"register failed: {r.status_code} {r.text[:200]}")
     return s, email, pw
@@ -57,14 +94,18 @@ def restock_credits(email, n=100):
 def make_default_profile(session, name="Residential_Standard"):
     """BUG-003 (Sprint 4) removed starter-profile auto-seeding, so probes
     that need a working /generate must explicitly create one first."""
-    return session.post(f"{BASE}/api/profiles/create", json={
-        "name": name, "make_default": True,
-        "price_data": {
-            "base_pane_rate": 5.0, "base_callout_fee": 75.0, "tax_rate": 0.085,
-            "story_surcharges": {"floor1": 1.0, "floor2": 1.25, "floor3": 1.5},
-            "add_on_rates": {"Screen Cleaning": 2.0, "Track Cleaning": 1.5, "Hard Water Treatment": 3.0},
-        },
-    })
+    return session.post(
+        f"{BASE}/api/profiles/create",
+        headers=_ajax_headers(session),
+        data=json.dumps({
+            "name": name, "make_default": True,
+            "price_data": {
+                "base_pane_rate": 5.0, "base_callout_fee": 75.0, "tax_rate": 0.085,
+                "story_surcharges": {"floor1": 1.0, "floor2": 1.25, "floor3": 1.5},
+                "add_on_rates": {"Screen Cleaning": 2.0, "Track Cleaning": 1.5, "Hard Water Treatment": 3.0},
+            },
+        }),
+    )
 
 # ------------------------------------------------------------------ P1
 def p1_arbitrary_file_download():

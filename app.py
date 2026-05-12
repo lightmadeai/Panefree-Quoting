@@ -20,10 +20,25 @@ def _user_pdf_dir(user_id):
     BUG-008 fix (Sprint 4): pre-fix, the download route served any file in
     project_root, exposing sovereign.db and source files to any logged-in
     user. Per-user buckets contain only PDFs that user has generated.
+
+    Hotfix-2 T3: directory mode locked to 0o700 (owner-only). The app user
+    is the only legitimate reader anyway — PDFs flow through /download,
+    which round-trips through Flask, not a static file server. Existing
+    dirs (pre-Hotfix-2) get tightened on first touch via the explicit
+    os.chmod below. On Windows the chmod is effectively a no-op (NTFS ACLs
+    own the actual permissions); the umask-default 0o777 there is fine
+    because the test environment isn't shared-host.
     """
     import config as _config
     d = os.path.join(_config.OUTPUT_DIR, str(int(user_id)))
-    os.makedirs(d, exist_ok=True)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except (OSError, NotImplementedError):
+        # Windows + some filesystems reject the chmod silently. The
+        # makedirs() mode flag already covers the create case; the chmod
+        # is a tightening pass for dirs created pre-Hotfix-2 on POSIX.
+        pass
     return d
 
 from flask import (
@@ -33,6 +48,10 @@ from flask import (
 from flask_login import (
     LoginManager, login_user, logout_user, login_required, current_user
 )
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_talisman import Talisman
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 import stripe
@@ -62,6 +81,93 @@ db.init_app(app)
 login_manager = LoginManager()
 login_manager.login_view = "login"
 login_manager.init_app(app)
+
+# Hotfix-2 T2: CSRF protection on all state-changing POSTs.
+#
+# Every <form method=POST> in templates must include
+#   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+# AJAX calls must send the same token via the `X-CSRFToken` request header.
+# A `<meta name="csrf-token" content="{{ csrf_token() }}">` element in each
+# template's <head> exposes the token to the inline JS that wires the
+# fetch() calls.
+#
+# /webhook/stripe is explicitly @csrf.exempt'd below — Stripe signs the
+# request body with HMAC and cannot provide a session-scoped CSRF token,
+# so layering both protections would only break the integration.
+#
+# WTF_CSRF_DISABLED env kill switch:
+#   The test suite (testing/stress_probe.py, test_sprint*.py, etc.) was
+#   written pre-CSRF and POSTs forms without tokens. Rather than refactor
+#   every test, the server can be started with WTF_CSRF_DISABLED=1 to
+#   bypass CSRF for the duration of the test run. This is a TEST-ONLY
+#   escape hatch — production MUST NOT set this var. CSRF correctness is
+#   verified independently by the smoke check in DEPLOYMENT.md §2.8.
+if os.environ.get("WTF_CSRF_DISABLED", "").lower() in ("1", "true", "yes"):
+    app.config["WTF_CSRF_ENABLED"] = False
+    app.logger.warning(
+        "[CSRF] disabled via WTF_CSRF_DISABLED env — TEST USE ONLY. "
+        "Production deploys MUST NOT set this variable."
+    )
+csrf = CSRFProtect(app)
+
+# Hotfix-2 T4 (part 1): rate limiting on auth + state-changing routes.
+#
+# No global default — only the @limiter.limit decorators below apply.
+# Storage is in-memory (single-process); Sprint 5 will swap to Redis when
+# we deploy multi-worker. IP key uses get_remote_address, which reads
+# request.remote_addr. Behind a reverse proxy that needs ProxyFix middleware
+# to honor X-Forwarded-For — see DEPLOYMENT.md §11 (Sprint 5 ops).
+#
+# Local tests opt out via RATELIMIT_DISABLED=1 (mirrors WTF_CSRF_DISABLED's
+# pattern) so the locust + stress_probe harness doesn't trip the limits
+# during high-rate runs.
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+    enabled=os.environ.get("RATELIMIT_DISABLED", "").lower() not in ("1", "true", "yes"),
+)
+
+# Hotfix-2 T4 (part 2): security response headers via Flask-Talisman.
+#
+# CSP allowlist matches the third-party assets actually loaded:
+#   - cdn.tailwindcss.com (script)            — base styling JIT
+#   - fonts.googleapis.com (style)            — Google Fonts CSS
+#   - fonts.gstatic.com (font)                — Google Fonts files
+#   - js.stripe.com (script + frame)          — Stripe Checkout JS + iframe
+#   - api.stripe.com (connect)                — Stripe API from JS
+# style-src needs 'unsafe-inline' because templates use <style> blocks.
+# script-src does NOT — and there are no inline <script> blocks that
+# would need it (all our inline JS lives at file scope; the CSP nonce
+# pattern is overkill for this size of app).
+#
+# force_https mirrors the cookie-SECURE gate from T1: prod redirects HTTP
+# -> HTTPS, dev (DEV_MODE=1) skips the redirect so plain-HTTP localhost
+# still works.
+_TALISMAN_CSP = {
+    "default-src": "'self'",
+    "script-src": ["'self'", "cdn.tailwindcss.com", "js.stripe.com"],
+    "style-src": ["'self'", "'unsafe-inline'", "fonts.googleapis.com"],
+    "font-src": ["'self'", "fonts.gstatic.com"],
+    "img-src": ["'self'", "data:"],
+    "connect-src": ["'self'", "api.stripe.com"],
+    "frame-src": ["js.stripe.com"],
+    "frame-ancestors": "'none'",
+    "base-uri": "'self'",
+    "form-action": "'self'",
+}
+Talisman(
+    app,
+    content_security_policy=_TALISMAN_CSP,
+    force_https=not config.DEV_MODE,
+    strict_transport_security=not config.DEV_MODE,
+    strict_transport_security_max_age=31536000,  # 1 year
+    strict_transport_security_include_subdomains=True,
+    referrer_policy="strict-origin-when-cross-origin",
+    session_cookie_secure=False,  # T1 already manages this via config.py
+    frame_options="DENY",
+)
 
 if config.STRIPE_SECRET_KEY:
     stripe.api_key = config.STRIPE_SECRET_KEY
@@ -109,12 +215,29 @@ def load_user(user_id):
     return db.session.get(User, int(user_id))
 
 
+_SCHEMA_TABLE_ALLOWLIST = frozenset({"users", "quotes"})
+
+
 def _ensure_table_columns(table_name, additions):
     """
     SQLite lacks ALTER TABLE ... ADD COLUMN IF NOT EXISTS, and db.create_all()
     only creates missing tables — not missing columns. This runs once at boot
     and additively patches columns added after a table was first created.
+
+    Hotfix-2 T3 hardening: `table_name` is interpolated into raw SQL via
+    f-string (necessary — SQL parameter binding doesn't work for DDL
+    identifiers), so it MUST be an allowlisted constant. If a future
+    refactor turns this into a CLI tool or admin-facing helper, the
+    allowlist check below blocks SQLi at the helper boundary even if the
+    caller forgets to validate. Not user-reachable today; defense in depth
+    for tomorrow.
     """
+    if table_name not in _SCHEMA_TABLE_ALLOWLIST:
+        raise ValueError(
+            f"_ensure_table_columns: '{table_name}' not in allowlist "
+            f"{sorted(_SCHEMA_TABLE_ALLOWLIST)}. Refusing to interpolate "
+            f"unvetted identifier into DDL."
+        )
     existing = {row[1] for row in db.session.execute(text(f"PRAGMA table_info({table_name})")).fetchall()}
     for col, ddl in additions:
         if col not in existing:
@@ -611,9 +734,23 @@ def compute_internal_benchmark(user, current_pane_count, current_price):
 
 # ---------- Auth ----------
 
+PASSWORD_MAX_LEN = 128
+
+
 def _password_strength_error(password):
     """T4 password rules: ≥8 chars AND ≥1 digit. Returns the error message
-    to flash, or None if the password passes. Pure helper for testability."""
+    to flash, or None if the password passes. Pure helper for testability.
+
+    Hotfix-2 T3: upper-bounded at PASSWORD_MAX_LEN (128) to close the
+    pbkdf2 DoS surface. werkzeug.security uses 600k iterations of pbkdf2-
+    sha256; on a 4KB password that's a multi-second hash, which a single
+    attacker can use to saturate the auth path with a small number of
+    requests. 128 chars is well above any realistic human password
+    (longest in the haveibeenpwned dump of 600M is ~80) and well below
+    the DoS threshold. Rejecting (rather than truncating) is the safer
+    choice because truncation silently collides distinct passwords."""
+    if len(password) > PASSWORD_MAX_LEN:
+        return f"Password is too long (max {PASSWORD_MAX_LEN} characters)."
     if len(password) < 8:
         return "Password must be at least 8 characters long."
     if not any(c.isdigit() for c in password):
@@ -622,6 +759,7 @@ def _password_strength_error(password):
 
 
 @app.route("/register", methods=["GET", "POST"])
+@limiter.limit("5 per minute", methods=["POST"])
 def register():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
@@ -686,6 +824,7 @@ LOGIN_LOCKOUT_MINUTES = 15
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("10 per minute", methods=["POST"])
 def login():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
@@ -738,6 +877,7 @@ def login():
 
 
 @app.route("/verify/<token>")
+@limiter.limit("10 per minute")
 def verify_email(token):
     """One-use verification link. Tokens are 32-char uuid hex; expire 24h
     after registration. Used token is cleared so re-clicks fail (loud is
@@ -1450,6 +1590,7 @@ def dev_grant_credits():
 
 @app.route("/checkout", methods=["POST"])
 @login_required
+@limiter.limit("10 per minute")
 def checkout():
     if not config.STRIPE_SECRET_KEY:
         return jsonify({"status": "error", "message": "Stripe is not configured on this server."}), 503
@@ -1552,6 +1693,7 @@ def billing_portal():
 
 @app.route("/contact", methods=["GET", "POST"])
 @login_required
+@limiter.limit("5 per minute", methods=["POST"])
 def contact():
     """
     Custom-plan intake form. Linked from the soft-cap CTA in /generate
@@ -1841,6 +1983,7 @@ def _handle_invoice_failed(invoice):
 
 
 @app.route("/webhook/stripe", methods=["POST"])
+@csrf.exempt
 def stripe_webhook():
     """
     Signature-verified, idempotent fan-out. Handles credit-pack purchases,

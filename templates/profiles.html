@@ -59,9 +59,11 @@
                             <div class="flex justify-end gap-2">
                                 {% if not p.is_default %}
                                 <form method="POST" action="{{ url_for('profile_set_default', profile_id=p.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="text-sm text-blue-600 hover:underline">Set Default</button>
                                 </form>
                                 <form method="POST" action="{{ url_for('profile_delete', profile_id=p.id) }}" onsubmit="return confirm('Delete profile {{ p.name }}?')">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="text-sm text-red-600 hover:underline">Delete</button>
                                 </form>
                                 {% else %}

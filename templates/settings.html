@@ -33,6 +33,7 @@
             </h2>
 
             <form method="POST" class="space-y-8">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <!-- Active Profile Selection -->
                 <div class="bg-slate-50 p-4 rounded-lg border border-slate-200">
                     <label class="block text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">Active Pricing Profile</label>

@@ -3,6 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# Hotfix-2 T2: expose the per-session CSRF token to inline JS. The
+       fetch() calls below read it via document.querySelector and forward
+       it as `X-CSRFToken`, which Flask-WTF accepts in lieu of a form
+       field. #}
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Quote Generator | Panefree Quotes</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
@@ -26,6 +31,7 @@
                     <h2 class="text-xl font-semibold mb-6">Job Configuration</h2>
                     
                     <form id="quote-form" action="/calculate" method="POST" class="space-y-6">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="space-y-2">
                         <label class="block text-sm font-bold text-slate-500 uppercase tracking-wider">Customer / Job Name</label>
                         <input type="text" name="label" maxlength="80" value="{{ submitted_label or '' }}"
@@ -382,7 +388,10 @@
                             try {
                                 const res = await fetch('/api/profiles/create', {
                                     method: 'POST',
-                                    headers: {'Content-Type': 'application/json'},
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content,
+                                    },
                                     body: JSON.stringify({
                                         name,
                                         price_data,
@@ -628,7 +637,10 @@
                                 try {
                                     const res = await fetch('/generate', {
                                         method: 'POST',
-                                        headers: {'Content-Type': 'application/json'},
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content,
+                                        },
                                         body: JSON.stringify(payload),
                                     });
 
@@ -672,7 +684,10 @@
                                 try {
                                     const res = await fetch(`/quotes/${generatedQuoteId}/pdf?type=INVOICE`, {
                                         method: 'POST',
-                                        headers: {'Accept': 'application/json'},
+                                        headers: {
+                                            'Accept': 'application/json',
+                                            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content,
+                                        },
                                     });
                                     const data = await res.json();
                                     if (!res.ok || data.status !== 'success') {

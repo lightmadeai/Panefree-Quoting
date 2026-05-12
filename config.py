@@ -93,6 +93,39 @@ SOFT_CAP_THRESHOLD = int(os.environ.get("SOFT_CAP_THRESHOLD", "1000"))
 # environments (test/staging/prod) can route the conversation differently.
 SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@windowquoting.com")
 
+# ---------------------------------------------------------------------------
+# Hotfix-3 — Email backend (Postmark)
+# ---------------------------------------------------------------------------
+# mailer.py reads these at every send call (not cached) so individual tests
+# can monkeypatch via os.environ. Production sets them once via the hosting
+# provider's secrets store.
+#
+# POSTMARK_SERVER_TOKEN — from the "Server Tokens" tab of the Postmark
+# server (NOT the account API token). Scoped to one server so it can be
+# rotated independently.
+#
+# EMAIL_FROM — must match a Postmark-verified sender signature OR a
+# verified sender domain. Postmark rejects sends from unverified addresses.
+#
+# EMAIL_FROM_NAME — friendly display name. Postmark composes the final
+# From header as "Window Quoting <support@windowquoting.com>" when both
+# are set.
+#
+# ADMIN_EMAIL — destination for ops alerts (refund failures, contact
+# submissions, backup failures from Hotfix-5). Defaults to SUPPORT_EMAIL
+# so single-operator setups don't need to set both.
+POSTMARK_SERVER_TOKEN = os.environ.get("POSTMARK_SERVER_TOKEN")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "support@windowquoting.com")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Window Quoting")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", SUPPORT_EMAIL)
+
+# MAIL_DISABLED — test-only kill switch, same pattern as WTF_CSRF_DISABLED
+# and RATELIMIT_DISABLED. When set, mailer.send_email() becomes a no-op
+# that logs `[MAIL-DISABLED]` and returns True. Production MUST NOT set
+# this — app.py emits a loud warning at boot when it's set, and the
+# pre-flight check (DEPLOYMENT.md §2.1) catches it via env grep.
+MAIL_DISABLED = os.environ.get("MAIL_DISABLED", "").lower() in ("1", "true", "yes")
+
 # Per-account rate limit. Free users (and past_due subscribers, who fall
 # through to the credit path) are capped at this many /generate calls per
 # rolling 60-minute window. Active subscribers are exempt — they bypass

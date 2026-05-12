@@ -108,6 +108,26 @@ if os.environ.get("WTF_CSRF_DISABLED", "").lower() in ("1", "true", "yes"):
         "[CSRF] disabled via WTF_CSRF_DISABLED env — TEST USE ONLY. "
         "Production deploys MUST NOT set this variable."
     )
+
+# Hotfix-3 T1: loud warning when MAIL_DISABLED is set so production
+# misconfiguration is impossible to miss in the boot log. Same shape
+# as the CSRF warning above.
+if config.MAIL_DISABLED:
+    app.logger.warning(
+        "[MAIL] disabled via MAIL_DISABLED env — TEST USE ONLY. "
+        "Production deploys MUST NOT set this variable."
+    )
+elif not config.POSTMARK_SERVER_TOKEN and not config.DEV_MODE:
+    # In prod (DEV_MODE unset, MAIL_DISABLED unset), missing Postmark
+    # token is a hard config error — the verification email path is
+    # unreachable, so no new user can satisfy the email_verified gate.
+    # Fail loud at boot rather than silently ship an unusable build.
+    app.logger.error(
+        "[MAIL] POSTMARK_SERVER_TOKEN is not set and we are not in DEV_MODE/"
+        "MAIL_DISABLED — /register will accept signups but no verification "
+        "emails will be delivered. Set POSTMARK_SERVER_TOKEN or restart "
+        "with DEV_MODE=1 / MAIL_DISABLED=1 for non-prod runs."
+    )
 csrf = CSRFProtect(app)
 
 # Hotfix-2 T4 (part 1): rate limiting on auth + state-changing routes.

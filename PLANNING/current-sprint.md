@@ -6,8 +6,8 @@ drafted_by: Jade
 status: done
 created: 2026-05-06
 completed: 2026-05-08
-audit_status: approved
-audit_note: "Inquisitor pre-audit verdict CONDITIONAL PASS (audits/hotfix-1-pre-audit.md, 2026-05-07) — 5 non-blocking remarks, no blockers. Status flipped from pending → approved by Claude on execution start. All 5 tasks executed and verified. Awaiting Inquisitor post-audit."
+audit_status: passed
+audit_note: "Inquisitor pre-audit CONDITIONAL PASS (2026-05-07). All 5 tasks executed and verified. Post-audit PASSED (2026-05-08). Hotfix-1 complete."
 ---
 
 # Hotfix-1 — Email Verification + Deployment Polish

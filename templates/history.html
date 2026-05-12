@@ -69,9 +69,11 @@
                         <td class="px-6 py-4 text-right">
                             <div class="flex justify-end gap-2">
                                 <form method="POST" action="{{ url_for('quote_render_pdf', quote_id=q.id) }}?type=QUOTE">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="text-sm text-blue-600 hover:underline">Quote PDF</button>
                                 </form>
                                 <form method="POST" action="{{ url_for('quote_render_pdf', quote_id=q.id) }}?type=INVOICE">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="text-sm text-emerald-600 hover:underline">Invoice PDF</button>
                                 </form>
                             </div>

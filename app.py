@@ -33,6 +33,7 @@ from flask import (
 from flask_login import (
     LoginManager, login_user, logout_user, login_required, current_user
 )
+from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 import stripe
@@ -62,6 +63,34 @@ db.init_app(app)
 login_manager = LoginManager()
 login_manager.login_view = "login"
 login_manager.init_app(app)
+
+# Hotfix-2 T2: CSRF protection on all state-changing POSTs.
+#
+# Every <form method=POST> in templates must include
+#   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+# AJAX calls must send the same token via the `X-CSRFToken` request header.
+# A `<meta name="csrf-token" content="{{ csrf_token() }}">` element in each
+# template's <head> exposes the token to the inline JS that wires the
+# fetch() calls.
+#
+# /webhook/stripe is explicitly @csrf.exempt'd below — Stripe signs the
+# request body with HMAC and cannot provide a session-scoped CSRF token,
+# so layering both protections would only break the integration.
+#
+# WTF_CSRF_DISABLED env kill switch:
+#   The test suite (testing/stress_probe.py, test_sprint*.py, etc.) was
+#   written pre-CSRF and POSTs forms without tokens. Rather than refactor
+#   every test, the server can be started with WTF_CSRF_DISABLED=1 to
+#   bypass CSRF for the duration of the test run. This is a TEST-ONLY
+#   escape hatch — production MUST NOT set this var. CSRF correctness is
+#   verified independently by the smoke check in DEPLOYMENT.md §2.8.
+if os.environ.get("WTF_CSRF_DISABLED", "").lower() in ("1", "true", "yes"):
+    app.config["WTF_CSRF_ENABLED"] = False
+    app.logger.warning(
+        "[CSRF] disabled via WTF_CSRF_DISABLED env — TEST USE ONLY. "
+        "Production deploys MUST NOT set this variable."
+    )
+csrf = CSRFProtect(app)
 
 if config.STRIPE_SECRET_KEY:
     stripe.api_key = config.STRIPE_SECRET_KEY
@@ -1841,6 +1870,7 @@ def _handle_invoice_failed(invoice):
 
 
 @app.route("/webhook/stripe", methods=["POST"])
+@csrf.exempt
 def stripe_webhook():
     """
     Signature-verified, idempotent fan-out. Handles credit-pack purchases,

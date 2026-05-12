@@ -41,6 +41,7 @@
             </h2>
             <p class="text-emerald-700 mb-5 text-sm">No need to buy credits — generate as many quotes as your business needs.</p>
             <form method="POST" action="{{ url_for('billing_portal') }}" class="inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2 px-5 rounded-lg shadow-md transition-all">
                     Manage subscription
                 </button>
@@ -79,6 +80,7 @@
 
                 {% if simulator_active %}
                 <form method="POST" action="{{ url_for('dev_grant_credits') }}" class="mt-auto pt-6">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="pack" value="{{ pack_id }}">
                     <button type="submit" class="w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold py-3 rounded-lg shadow-md transition-all">
                         🧪 Simulate {{ pack.name }}
@@ -86,6 +88,7 @@
                 </form>
                 {% elif publishable_key %}
                 <form method="POST" action="{{ url_for('checkout') }}" class="mt-auto pt-6">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="pack" value="{{ pack_id }}">
                     <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg shadow-md transition-all">
                         Buy Credits
@@ -134,6 +137,7 @@
                 </div>
                 {% elif publishable_key %}
                 <form method="POST" action="{{ url_for('checkout') }}" class="mt-auto pt-6">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="pack" value="annual">
                     <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 rounded-lg shadow-md transition-all">
                         {% if is_past_due %}Reactivate{% else %}Subscribe{% endif %}

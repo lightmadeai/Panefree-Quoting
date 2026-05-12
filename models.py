@@ -87,8 +87,25 @@ class User(UserMixin, db.Model):
     quote_prefix = db.Column(db.Text, nullable=False, default="Q-")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    transactions = db.relationship("Transaction", backref="user", lazy=True)
-    profiles = db.relationship("PricingProfile", backref="user", lazy=True, cascade="all, delete-orphan")
+    # Hotfix-3 T4 (Inquisitor C2): all child rows cascade-delete with the
+    # user. Hard delete is the GDPR-compliant default; Stripe Dashboard
+    # remains the canonical source of historic billing records.
+    transactions = db.relationship(
+        "Transaction", backref="user", lazy=True,
+        cascade="all, delete-orphan",
+    )
+    profiles = db.relationship(
+        "PricingProfile", backref="user", lazy=True,
+        cascade="all, delete-orphan",
+    )
+    quotes = db.relationship(
+        "Quote", backref="user", lazy=True,
+        cascade="all, delete-orphan",
+    )
+    contact_submissions = db.relationship(
+        "ContactSubmission", backref="user", lazy=True,
+        cascade="all, delete-orphan",
+    )
 
     def set_password(self, raw):
         self.password_hash = generate_password_hash(raw)

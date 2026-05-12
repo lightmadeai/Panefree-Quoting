@@ -1,0 +1,13 @@
+Your Window Quoting account is closed
+
+We've closed the Window Quoting account for {{ closed_email }}. Your
+quote history, pricing profiles, and saved PDFs have been permanently
+deleted.
+
+{% if had_subscription -%}
+Your subscription has been canceled with Stripe — no future charges
+will be made. Past invoices remain accessible in your Stripe receipts.
+
+{% endif -%}
+Didn't request this? Reach out immediately to {{ support_email }} —
+we'll investigate.

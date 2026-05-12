@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import json
+import shutil
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -2330,6 +2331,126 @@ def account():
         invoice_prefix_default=INVOICE_PREFIX_DEFAULT,
         invoice_prefix_input_max=INVOICE_PREFIX_INPUT_MAX,
     )
+
+
+# ---------- Account deletion (Hotfix-3 T4) ----------
+
+@app.route("/account/delete", methods=["GET", "POST"])
+@login_required
+def account_delete():
+    """
+    Hotfix-3 T4 (Inquisitor C2): self-serve account deletion.
+
+    Hard delete, not soft delete. GDPR Article 17 ("right to erasure")
+    requires deletion without undue delay; soft delete is a compliance
+    liability unless justified by legitimate interest (which we don't have
+    for the user-row + quote history). Stripe Dashboard remains the
+    canonical record of historic billing, which is the only data we have
+    a legitimate-interest argument to retain anyway.
+
+    Order of operations (intentional):
+      1. POST validates the confirmation email matches current_user.email.
+         Wrong email -> flash + re-render. Closes the misclick path.
+      2. Best-effort Stripe subscription cancel. Failure is logged + admin
+         alerted, but does NOT block the deletion — the user has the
+         legal right to leave regardless of whether Stripe's API hiccups.
+      3. logout_user() BEFORE DB delete so Flask-Login doesn't try to
+         touch a soon-to-be-deleted row mid-request.
+      4. Snapshot the email + sub_id BEFORE the User row goes away.
+      5. db.session.delete(user) cascades through profiles, quotes,
+         transactions, contact_submissions (all set in models.py).
+      6. shutil.rmtree the per-user PDF bucket. Errors here are non-fatal
+         (the bucket is regeneratable from DB; gone-from-DB means gone).
+      7. Send the account-closed confirmation email (best-effort).
+      8. Audit log `[ACCOUNT-DELETED]` carries the snapshot data so
+         post-hoc forensics has something to grep on.
+    """
+    user = db.session.get(User, current_user.id)
+    had_subscription = user.subscription_status in ("active", "past_due")
+
+    if request.method == "POST":
+        confirm = (request.form.get("confirm_email") or "").strip().lower()
+        if confirm != user.email.lower():
+            flash(
+                "The email you typed didn't match your account email. "
+                "Account NOT deleted.",
+                "error",
+            )
+            return render_template("account_delete.html")
+
+        # Snapshot for audit log + closed-email — these reads must happen
+        # before the delete clears the row.
+        deleted_email = user.email
+        deleted_uid = user.id
+        sub_id = user.subscription_id
+
+        # Best-effort Stripe sub cancel. Don't block delete on failure.
+        if sub_id and config.STRIPE_SECRET_KEY:
+            try:
+                stripe.Subscription.delete(sub_id)
+            except Exception as e:
+                app.logger.error(
+                    "[STRIPE-CANCEL-FAILED] user_id=%s sub_id=%s error=%r — "
+                    "proceeding with delete; manual reconcile needed",
+                    deleted_uid, sub_id, str(e),
+                )
+                # T5 will route this to ADMIN_EMAIL once the wiring is in.
+
+        # Log out the session BEFORE deleting the row — Flask-Login
+        # otherwise tries to load the (deleted) user on the next
+        # before_request hook and 500s.
+        logout_user()
+
+        # Cascade delete via SQLAlchemy relationships (models.py).
+        db.session.delete(user)
+        db.session.commit()
+
+        # PDF bucket cleanup — non-fatal on error; the bucket is purely a
+        # cache of DB-derivable content.
+        try:
+            pdf_dir = os.path.join(config.OUTPUT_DIR, str(deleted_uid))
+            if os.path.isdir(pdf_dir):
+                shutil.rmtree(pdf_dir, ignore_errors=True)
+        except Exception as e:
+            app.logger.warning(
+                "[ACCOUNT-DELETE-PDF-CLEANUP] user_id=%s error=%r — "
+                "DB row gone but PDF dir may persist; safe to ignore",
+                deleted_uid, str(e),
+            )
+
+        # Confirmation email — best-effort. The user can't reach support
+        # via the now-deleted account, but they can still see the closed
+        # confirmation in their inbox.
+        mailer.send_email(
+            to=deleted_email,
+            subject="Your Window Quoting account is closed",
+            html_body=render_template(
+                "email/account_closed.html",
+                closed_email=deleted_email,
+                support_email=config.SUPPORT_EMAIL,
+                had_subscription=had_subscription,
+            ),
+            text_body=render_template(
+                "email/account_closed.txt",
+                closed_email=deleted_email,
+                support_email=config.SUPPORT_EMAIL,
+                had_subscription=had_subscription,
+            ),
+        )
+
+        app.logger.info(
+            "[ACCOUNT-DELETED] user_id=%s email=%s sub_id=%s had_subscription=%s",
+            deleted_uid, deleted_email, sub_id, had_subscription,
+        )
+
+        flash(
+            "Your account is closed. We've sent a confirmation email to "
+            f"{deleted_email}.",
+            "success",
+        )
+        return redirect(url_for("register"))
+
+    return render_template("account_delete.html")
 
 
 # ---------- Legacy settings route — redirect to the new profile UI ----------

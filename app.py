@@ -57,6 +57,7 @@ from sqlalchemy.exc import IntegrityError
 import stripe
 
 import config
+import mailer
 from engine import calculate_quote
 from generator import (
     generate_document, derive_doc_code,
@@ -757,6 +758,56 @@ def compute_internal_benchmark(user, current_pane_count, current_price):
 PASSWORD_MAX_LEN = 128
 
 
+def _issue_verification_token(user):
+    """
+    Generate a fresh verification token for `user`, persist it on the row,
+    and commit. Used by both /register (first-time) and /resend-verification
+    (re-issue). Token is 32-char uuid hex; expires 24h from issue.
+
+    Returns the token string so the caller can build the verify URL without
+    a second DB round-trip.
+    """
+    token = uuid.uuid4().hex
+    user.email_verification_token = token
+    user.email_verification_token_expires = datetime.utcnow() + timedelta(hours=24)
+    db.session.commit()
+    return token
+
+
+def _send_verification_email(user, token):
+    """
+    Send the email-verification message to `user`. Returns True on success,
+    False on send failure (mailer never raises, so neither do we).
+
+    The verify URL log line is kept as a fallback for ops debugging — if a
+    customer reports the email never arrived, ops can pull the most-recent
+    verify URL from the gunicorn log without needing DB access. Logged at
+    INFO so it's visible in normal log retention but doesn't trip Sentry
+    alerts. Postmark dashboard is the canonical record of delivery.
+    """
+    verify_url = url_for("verify_email", token=token, _external=True)
+    app.logger.info(
+        "[EMAIL-VERIFICATION] issued for user_id=%s email=%s verify_url=%s",
+        user.id, user.email, verify_url,
+    )
+    html_body = render_template(
+        "email/verify.html",
+        verify_url=verify_url,
+        support_email=config.SUPPORT_EMAIL,
+    )
+    text_body = render_template(
+        "email/verify.txt",
+        verify_url=verify_url,
+        support_email=config.SUPPORT_EMAIL,
+    )
+    return mailer.send_email(
+        to=user.email,
+        subject="Verify your Window Quoting email",
+        html_body=html_body,
+        text_body=text_body,
+    )
+
+
 def _password_strength_error(password):
     """T4 password rules: ≥8 chars AND ≥1 digit. Returns the error message
     to flash, or None if the password passes. Pure helper for testability.
@@ -801,27 +852,23 @@ def register():
             flash("That email is already registered.", "error")
             return render_template("register.html")
 
-        # Verification token — single-use, 24h expiry. Real email delivery
-        # is out of scope this sprint; we log the verify URL instead.
-        token = uuid.uuid4().hex
+        # Hotfix-3 T2: real verification email via Postmark. Pre-Hotfix-3
+        # the verify URL was only logged; users could never satisfy the
+        # email_verified gate unless ops manually pulled the log line.
         user = User(
             email=email,
             credit_balance=config.STARTING_CREDITS,
             email_verified=False,
-            email_verification_token=token,
-            email_verification_token_expires=datetime.utcnow() + timedelta(hours=24),
         )
         user.set_password(password)
         db.session.add(user)
-        db.session.commit()
+        db.session.commit()  # commit before _issue_verification_token so user.id exists
 
         # BUG-003 (Sprint 4): new users no longer get auto-seeded starter
         # profiles. The first hit to "/" redirects them into /profiles/new
         # so the first profile creation IS the onboarding step.
-        verify_url = url_for("verify_email", token=token, _external=True)
-        app.logger.info(
-            "[EMAIL-VERIFICATION] new user %s — verify URL: %s", email, verify_url,
-        )
+        token = _issue_verification_token(user)
+        sent = _send_verification_email(user, token)
         login_user(user)
         # DO NOT REMOVE — required for PERMANENT_SESSION_LIFETIME to apply.
         # Flask only honors the configured lifetime when session.permanent is
@@ -829,11 +876,23 @@ def register():
         # the 7-day cap (config.py) becomes a no-op.
         from flask import session as _session
         _session.permanent = True
-        flash(
-            "Account created. Check your email for a verification link before "
-            "generating quotes.",
-            "success",
-        )
+        if sent:
+            flash(
+                "Account created. Check your email for a verification link "
+                "before generating quotes.",
+                "success",
+            )
+        else:
+            # Send failed but user row + token persist — they can click the
+            # resend banner from the EMAIL_NOT_VERIFIED page. Don't roll back
+            # the registration; losing the account on a transient email
+            # outage is worse than the inconvenience of one resend click.
+            flash(
+                "Account created, but we couldn't send your verification "
+                "email just now. Try the resend link, or contact support if "
+                "the problem persists.",
+                "error",
+            )
         return redirect(url_for("index"))
 
     return render_template("register.html")
@@ -915,6 +974,42 @@ def verify_email(token):
     user.email_verification_token_expires = None
     db.session.commit()
     flash("Email verified — you can now generate quotes.", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/resend-verification", methods=["POST"])
+@login_required
+@limiter.limit("3 per hour")
+def resend_verification():
+    """
+    Hotfix-3 T2 (Inquisitor C1): logged-in-only resend of the verification
+    email. No email parameter — the user must already be authenticated as
+    the address they want re-verified. This closes the enumeration vector
+    (an anonymous /resend?email=... would let an attacker probe which
+    addresses are registered).
+
+    No-op for already-verified users — they just get a redirect to /.
+    Rate-limited 3/hour/IP via Flask-Limiter (Hotfix-2 T4).
+    """
+    user = db.session.get(User, current_user.id)
+    if user.email_verified:
+        flash("Your email is already verified.", "info")
+        return redirect(url_for("index"))
+
+    token = _issue_verification_token(user)
+    sent = _send_verification_email(user, token)
+    if sent:
+        flash(
+            "Verification email sent. Check your inbox (and spam folder) — "
+            "the link expires in 24 hours.",
+            "success",
+        )
+    else:
+        flash(
+            "We couldn't send the verification email just now. Try again "
+            "in a few minutes, or contact support.",
+            "error",
+        )
     return redirect(url_for("index"))
 
 

@@ -19,6 +19,7 @@ sys.path.insert(0, ROOT)
 os.environ.setdefault("WTF_CSRF_DISABLED", "1")
 os.environ.setdefault("DEV_MODE", "1")
 os.environ.setdefault("RATELIMIT_DISABLED", "1")
+os.environ.setdefault("MAIL_DISABLED", "1")  # Hotfix-3 — no live Postmark from tests
 
 import logging
 logging.getLogger("werkzeug").setLevel(logging.WARNING)

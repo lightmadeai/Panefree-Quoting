@@ -51,10 +51,11 @@ app = Flask(__name__)
 app.config.from_object(config)
 app.secret_key = config.SECRET_KEY
 
-# Session timeout (T4). PERMANENT_SESSION_LIFETIME only takes effect when
-# `session.permanent = True` — set in load_user / login. After 24h of
-# idle, the cookie expires and the user is forced through /login again.
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=24)
+# Session timeout. PERMANENT_SESSION_LIFETIME comes in via from_object(config)
+# above (defined in config.py — Hotfix-1 T2 raised the cap from 24h to 7d).
+# Only takes effect when `session.permanent = True` — set in /register and
+# /login after a successful auth. After the configured idle window the
+# cookie expires and the user is forced through /login again.
 
 db.init_app(app)
 
@@ -331,6 +332,18 @@ CUSTOMER_NAME_MAX = 100
 CUSTOMER_ADDR_MAX = 200
 CUSTOMER_EMAIL_MAX = 254  # RFC 5321 max length
 CUSTOMER_PHONE_MAX = 30
+# Hotfix-1 T4 — caps for fields that previously had only `.strip()` and no
+# length bound, opening a small DOS / DB-bloat surface. Truncated silently
+# via _sanitize_storage (matches existing customer_* behavior). Sized to
+# accommodate realistic input plus generous slack — a real business name
+# never approaches 200 chars, but truncation at 200 still produces something
+# usable rather than rejecting the whole form.
+BUSINESS_NAME_MAX = 200
+PROFILE_NAME_MAX = LABEL_MAX_LEN          # profile labels follow the quote-label cap
+CONTACT_COMPANY_MAX = 200
+CONTACT_VOLUME_MAX = 200
+CONTACT_GROWTH_MAX = 2000                 # notes/description tier per spec
+CONTACT_EMAIL_MAX = CUSTOMER_EMAIL_MAX    # same RFC ceiling
 # Invoice prefix raw-input cap (Feature 3). One char less than the
 # stored INVOICE_PREFIX_MAX (=12) so sanitize_invoice_prefix can
 # auto-append a "-" without exceeding the column-level cap.
@@ -652,7 +665,10 @@ def register():
             "[EMAIL-VERIFICATION] new user %s — verify URL: %s", email, verify_url,
         )
         login_user(user)
-        # Mark session permanent so PERMANENT_SESSION_LIFETIME applies.
+        # DO NOT REMOVE — required for PERMANENT_SESSION_LIFETIME to apply.
+        # Flask only honors the configured lifetime when session.permanent is
+        # True; without this, cookies fall back to browser-session scope and
+        # the 7-day cap (config.py) becomes a no-op.
         from flask import session as _session
         _session.permanent = True
         flash(
@@ -712,6 +728,8 @@ def login():
         # BUG-003 (Sprint 4): no auto-seed at login either. Users without
         # any profiles get bounced to /profiles/new by the index route.
         login_user(user)
+        # DO NOT REMOVE — required for PERMANENT_SESSION_LIFETIME to apply.
+        # See /register for the full rationale.
         from flask import session as _session
         _session.permanent = True
         return redirect(url_for("index"))
@@ -1027,11 +1045,36 @@ def generate():
         db.session.rollback()
         if not is_subscriber:
             # Symmetric refund. Subscribers had nothing reserved, so skip.
-            db.session.execute(
-                text("UPDATE users SET credit_balance = credit_balance + 1 WHERE id = :uid"),
-                {"uid": current_user.id},
-            )
-            db.session.commit()
+            #
+            # Hotfix-1 T5 (OBS-002): wrap the refund itself in try/except so
+            # a failure here (DB lock, connection drop, disk full mid-commit,
+            # whatever) doesn't propagate up and 500 the caller. The user
+            # already paid the cost of a failed quote — they should not also
+            # eat a 500. The quote rollback above succeeded; the worst case
+            # if the refund silently fails is one missing credit, which is
+            # recoverable manually from the transactions table.
+            #
+            # Retry strategy: deliberately none. A single retry inside the
+            # request would block the response on the same flake; a queued
+            # retry is over-engineered for a credit count. We log loudly so
+            # ops can spot a pattern and credit-back from the audit trail.
+            try:
+                db.session.execute(
+                    text(
+                        "UPDATE users SET credit_balance = credit_balance + 1 "
+                        "WHERE id = :uid"
+                    ),
+                    {"uid": current_user.id},
+                )
+                db.session.commit()
+            except Exception as refund_err:
+                db.session.rollback()
+                app.logger.error(
+                    "[CREDIT-REFUND-FAILED] user_id=%s after /generate failure: "
+                    "original_error=%r refund_error=%r — credit may be lost; "
+                    "manual reconciliation required.",
+                    current_user.id, str(e), str(refund_err),
+                )
         return jsonify({"status": "error", "message": str(e)}), 400
 
     response = {
@@ -1112,7 +1155,9 @@ def profiles_list():
 def profile_new():
     if request.method == "POST":
         form = request.form
-        name = (form.get("name") or "").strip()
+        # Hotfix-1 T4: cap profile name at the label tier so a multi-MB
+        # name can't bloat the pricing_profiles table.
+        name = _sanitize_storage(form.get("name"), PROFILE_NAME_MAX)
 
         def render_form_with_error(msg):
             flash(msg, "error")
@@ -1175,7 +1220,8 @@ def profile_new():
 def api_profile_create():
     """JSON endpoint for inline profile creation from the quote form."""
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
+    # Hotfix-1 T4: cap as on the HTML route — same tier, same rationale.
+    name = _sanitize_storage(data.get("name"), PROFILE_NAME_MAX)
     price_data = data.get("price_data")
     make_default = bool(data.get("make_default"))
 
@@ -1513,10 +1559,14 @@ def contact():
     no email backend yet (deferred per Sprint 3 scope).
     """
     if request.method == "POST":
-        company_name = (request.form.get("company_name") or "").strip()
-        current_volume = (request.form.get("current_volume") or "").strip()
-        expected_growth = (request.form.get("expected_growth") or "").strip()
-        email = (request.form.get("email") or "").strip().lower()
+        # Hotfix-1 T4: cap each field at its tier (label/short/notes/email).
+        # Truncation is silent — the form has no per-field hint, so silently
+        # storing the first N chars beats rejecting outright and losing the
+        # rest of the submission.
+        company_name = _sanitize_storage(request.form.get("company_name"), CONTACT_COMPANY_MAX)
+        current_volume = _sanitize_storage(request.form.get("current_volume"), CONTACT_VOLUME_MAX)
+        expected_growth = _sanitize_storage(request.form.get("expected_growth"), CONTACT_GROWTH_MAX)
+        email = _sanitize_storage(request.form.get("email"), CONTACT_EMAIL_MAX).lower()
 
         # Field-by-field required check so the error names what's missing.
         missing = [name for name, v in [
@@ -1850,8 +1900,11 @@ def account():
             return redirect(url_for("account"))
 
         user = db.session.get(User, current_user.id)
-        business_name = (request.form.get("business_name") or "").strip()
-        phone_number = (request.form.get("phone_number") or "").strip()
+        # Hotfix-1 T4: cap before .strip() so a 50KB business_name can't sit
+        # in memory longer than necessary. _sanitize_storage handles both
+        # the trim and the cap.
+        business_name = _sanitize_storage(request.form.get("business_name"), BUSINESS_NAME_MAX)
+        phone_number = _sanitize_storage(request.form.get("phone_number"), CUSTOMER_PHONE_MAX)
         quote_footer = sanitize_footer(request.form.get("quote_footer_text"))
         invoice_footer = sanitize_footer(request.form.get("invoice_footer_text"))
         user.business_name = business_name or None

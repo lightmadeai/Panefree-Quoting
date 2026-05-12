@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 
 project_root = os.path.dirname(os.path.abspath(__file__))
 
@@ -6,6 +7,12 @@ SECRET_KEY = os.environ.get("SRE_SECRET_KEY", "sre_secret_key_change_me_in_prod"
 DATABASE_PATH = os.path.join(project_root, "sovereign.db")
 SQLALCHEMY_DATABASE_URI = f"sqlite:///{DATABASE_PATH}"
 SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+# Session timeout (Hotfix-1 T2). Flask reads this via app.config.from_object()
+# and applies it to any session marked .permanent = True (set in /register
+# and /login). Hotfix-1 raised the previous 24h value to 7 days so users
+# don't get bounced mid-week. Tunable here only — do not redeclare in app.py.
+PERMANENT_SESSION_LIFETIME = timedelta(days=7)
 
 # Generated PDFs live here, segregated by user ID. The download route
 # (BUG-008 fix, Sprint 4) only ever reads from <OUTPUT_DIR>/<current_user.id>/,

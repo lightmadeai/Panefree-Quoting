@@ -66,7 +66,31 @@ EOF
 
 If this prints `DRIFT`, **stop**. See the "Schema parity" section below before proceeding.
 
-### 2.5 Stress probe passes
+### 2.5 Output directory + legacy PDF migration (Hotfix-1 T3)
+
+The `output/` tree (per-user PDF buckets) is created on demand by `_user_pdf_dir()`, but a fresh deployment should pre-create it so first-run permission errors don't surface mid-request:
+
+```bash
+mkdir -p output && chmod 750 output
+chown <app-user>:<app-group> output
+```
+
+Confirm `.gitignore` excludes the tree (it should — line 17 covers `output/`):
+
+```bash
+git check-ignore output/ && echo "OK: output/ is gitignored"
+```
+
+**One-time legacy PDF migration.** Before Sprint 4's BUG-008 fix, `/generate` wrote PDFs to `project_root/`. Those files are unreachable through the post-fix `/download` route. Run the migration script once to sweep them into a quarantine subdirectory of `output/`:
+
+```bash
+python scripts/migrate-pdfs.py --dry-run    # preview
+python scripts/migrate-pdfs.py              # apply
+```
+
+The script is idempotent — second run is a no-op. It does NOT attribute legacy files to specific users (the Quote table never recorded the rendered filename, so the mapping doesn't exist). Files land in `output/_legacy_unattributed/` for archival/forensic use.
+
+### 2.6 Stress probe passes
 ```bash
 python app.py &
 SERVER_PID=$!
@@ -76,7 +100,7 @@ kill $SERVER_PID
 ```
 All probes must report PASS / expected status codes. Any FAIL is a deployment blocker.
 
-### 2.6 No debug statements in production code
+### 2.7 No debug statements in production code
 Sprint 4 T5 cleared these; re-grep before each deploy:
 ```bash
 grep -nrE "print\(|console\.log\(" --include="*.py" --include="*.html" --include="*.js" .
@@ -94,8 +118,9 @@ project_root/
 │   ├── 1/                           # User-id-keyed buckets
 │   │   ├── quote_<rand>.pdf
 │   │   └── invoice_<rand>.pdf
-│   └── 2/
-│       └── ...
+│   ├── 2/
+│   │   └── ...
+│   └── _legacy_unattributed/        # Hotfix-1 T3 quarantine (pre-BUG-008 PDFs)
 ├── templates/                       # Jinja2
 ├── static/                          # served by Flask (or upstream nginx)
 └── PLANNING/, testing/              # Not served

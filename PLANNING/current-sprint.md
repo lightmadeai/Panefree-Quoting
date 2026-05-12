@@ -1,30 +1,34 @@
 ---
-label: hotfix-2
+label: hotfix-3
 project: window-quoting
 phase: stabilize
-drafted_by: Claude (per Chris blanket approval, 2026-05-11)
-status: done
-created: 2026-05-11
-completed: 2026-05-11
-audit_status: pending
-audit_note: "Drafted + executed in one session per Chris's blanket approval (2026-05-11). All 5 tasks landed, smoke-tested via curl + python -c assertions, regression-verified via stress_probe (13/13 PASS) and locust (3270 reqs, 0 failures, no quote-number gaps). Awaiting Inquisitor post-audit verdict."
+status: ready
+audit_status: pre-approved (conditional)
+created: 2026-05-12
+depends_on: hotfix-2 (done, PASS)
+next_up: hotfix-4
 ---
 
-# Hotfix-2 — Pre-Production Security Hardening
+# Current Sprint: Hotfix-3 — User Access Lifecycle
 
-**Full manifest:** `PLANNING/sprints/HOTFIX_2_MANIFEST.md`
+**Full draft:** `PLANNING/drafts/hotfix-3.md`
 
-## Tasks (Summary)
-- **T1:** Cookie hardening (SECURE/HTTPONLY/SAMESITE) + register.html minlength fix
-- **T2:** CSRF protection via Flask-WTF (all forms + AJAX X-CSRFToken)
-- **T3:** Defensive bounds (table allowlist + password cap + dir mode 0o700)
-- **T4:** Rate limiting (Flask-Limiter on auth routes) + security headers (Flask-Talisman + CSP)
-- **T5:** Reproducible deps (requirements.txt) + DEPLOYMENT.md addenda
+## Pipeline Status
+- **Hotfix-2:** ✅ DONE, PASS (post-audit complete)
+- **Hotfix-3:** 🟡 READY — adoption complete, Inquisitor conditions baked in
+- **Hotfix-4:** ⏳ READY (depends on H3 merge)
+- **Hotfix-5:** ⏳ READY (depends on H3 merge)
+- **Hotfix-6:** ⏳ READY (depends on H3+H4+H5 merge, relabeled from sprint-5-ops)
 
-## Phase
-Stabilize — pre-prod security hardening per 2026-05-11 audit
+## Chris-Sprint
+Chris's personal production-readiness checklist: `PLANNING/chris-sprint.md`
+**Phase 1 (Accounts) can start NOW** — Postmark, Sentry, UptimeRobot, B2 bucket.
 
-## Key References
-- Security review transcript: 2026-05-11 conversation
-- Locust stress test results: `testing/stress/run1_stats.csv` (5057 reqs, 0 failures)
-- Branch from hotfix-1 (Hotfix-1 done/approved 2026-05-08)
+## Inquisitor Conditions (All Resolved)
+- H3: Postmark confirmed, hard delete for accounts, /resend-verification logged-in-only
+- H4: Sentry free tier + 500/hr rate cap, email-only alerts
+- H5: B2 for backups, add schema dump
+- H6: Relabeled as hotfix-6 (not a new phase), real card Stripe test, post-audit before DNS flip
+
+## Execution Order
+H3 → H4 → H5 → H6 (serial, Claude executes)

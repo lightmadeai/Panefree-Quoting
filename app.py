@@ -49,6 +49,9 @@ from flask_login import (
     LoginManager, login_user, logout_user, login_required, current_user
 )
 from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_talisman import Talisman
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 import stripe
@@ -106,6 +109,65 @@ if os.environ.get("WTF_CSRF_DISABLED", "").lower() in ("1", "true", "yes"):
         "Production deploys MUST NOT set this variable."
     )
 csrf = CSRFProtect(app)
+
+# Hotfix-2 T4 (part 1): rate limiting on auth + state-changing routes.
+#
+# No global default — only the @limiter.limit decorators below apply.
+# Storage is in-memory (single-process); Sprint 5 will swap to Redis when
+# we deploy multi-worker. IP key uses get_remote_address, which reads
+# request.remote_addr. Behind a reverse proxy that needs ProxyFix middleware
+# to honor X-Forwarded-For — see DEPLOYMENT.md §11 (Sprint 5 ops).
+#
+# Local tests opt out via RATELIMIT_DISABLED=1 (mirrors WTF_CSRF_DISABLED's
+# pattern) so the locust + stress_probe harness doesn't trip the limits
+# during high-rate runs.
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+    enabled=os.environ.get("RATELIMIT_DISABLED", "").lower() not in ("1", "true", "yes"),
+)
+
+# Hotfix-2 T4 (part 2): security response headers via Flask-Talisman.
+#
+# CSP allowlist matches the third-party assets actually loaded:
+#   - cdn.tailwindcss.com (script)            — base styling JIT
+#   - fonts.googleapis.com (style)            — Google Fonts CSS
+#   - fonts.gstatic.com (font)                — Google Fonts files
+#   - js.stripe.com (script + frame)          — Stripe Checkout JS + iframe
+#   - api.stripe.com (connect)                — Stripe API from JS
+# style-src needs 'unsafe-inline' because templates use <style> blocks.
+# script-src does NOT — and there are no inline <script> blocks that
+# would need it (all our inline JS lives at file scope; the CSP nonce
+# pattern is overkill for this size of app).
+#
+# force_https mirrors the cookie-SECURE gate from T1: prod redirects HTTP
+# -> HTTPS, dev (DEV_MODE=1) skips the redirect so plain-HTTP localhost
+# still works.
+_TALISMAN_CSP = {
+    "default-src": "'self'",
+    "script-src": ["'self'", "cdn.tailwindcss.com", "js.stripe.com"],
+    "style-src": ["'self'", "'unsafe-inline'", "fonts.googleapis.com"],
+    "font-src": ["'self'", "fonts.gstatic.com"],
+    "img-src": ["'self'", "data:"],
+    "connect-src": ["'self'", "api.stripe.com"],
+    "frame-src": ["js.stripe.com"],
+    "frame-ancestors": "'none'",
+    "base-uri": "'self'",
+    "form-action": "'self'",
+}
+Talisman(
+    app,
+    content_security_policy=_TALISMAN_CSP,
+    force_https=not config.DEV_MODE,
+    strict_transport_security=not config.DEV_MODE,
+    strict_transport_security_max_age=31536000,  # 1 year
+    strict_transport_security_include_subdomains=True,
+    referrer_policy="strict-origin-when-cross-origin",
+    session_cookie_secure=False,  # T1 already manages this via config.py
+    frame_options="DENY",
+)
 
 if config.STRIPE_SECRET_KEY:
     stripe.api_key = config.STRIPE_SECRET_KEY
@@ -697,6 +759,7 @@ def _password_strength_error(password):
 
 
 @app.route("/register", methods=["GET", "POST"])
+@limiter.limit("5 per minute", methods=["POST"])
 def register():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
@@ -761,6 +824,7 @@ LOGIN_LOCKOUT_MINUTES = 15
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("10 per minute", methods=["POST"])
 def login():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
@@ -813,6 +877,7 @@ def login():
 
 
 @app.route("/verify/<token>")
+@limiter.limit("10 per minute")
 def verify_email(token):
     """One-use verification link. Tokens are 32-char uuid hex; expire 24h
     after registration. Used token is cleared so re-clicks fail (loud is
@@ -1525,6 +1590,7 @@ def dev_grant_credits():
 
 @app.route("/checkout", methods=["POST"])
 @login_required
+@limiter.limit("10 per minute")
 def checkout():
     if not config.STRIPE_SECRET_KEY:
         return jsonify({"status": "error", "message": "Stripe is not configured on this server."}), 503
@@ -1627,6 +1693,7 @@ def billing_portal():
 
 @app.route("/contact", methods=["GET", "POST"])
 @login_required
+@limiter.limit("5 per minute", methods=["POST"])
 def contact():
     """
     Custom-plan intake form. Linked from the soft-cap CTA in /generate

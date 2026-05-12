@@ -13,8 +13,12 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, ROOT)
 
 # Test-only escape hatches — set BEFORE importing app so app.py sees them.
+# DEV_MODE=1 also disables SESSION_COOKIE_SECURE (T1) and force_https (T4)
+# so plain-HTTP localhost works. RATELIMIT_DISABLED=1 lets locust hammer
+# /login + /register without tripping the per-IP gates.
 os.environ.setdefault("WTF_CSRF_DISABLED", "1")
-os.environ.setdefault("DEV_MODE", "1")  # also disables SESSION_COOKIE_SECURE for plain-HTTP local
+os.environ.setdefault("DEV_MODE", "1")
+os.environ.setdefault("RATELIMIT_DISABLED", "1")
 
 import logging
 logging.getLogger("werkzeug").setLevel(logging.WARNING)

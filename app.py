@@ -346,10 +346,21 @@ with app.app_context():
         ("email_verified", "BOOLEAN NOT NULL DEFAULT 0"),
         ("email_verification_token", "TEXT"),
         ("email_verification_token_expires", "DATETIME"),
+        # Hotfix-3 T3: password reset tokens. Mirror the email_verification
+        # columns; same shape, separate column so a reset-link click can't
+        # accidentally satisfy the email-verification gate (different
+        # security domains: verify proves you own the email, reset proves
+        # you can read the inbox NOW).
+        ("password_reset_token", "TEXT"),
+        ("password_reset_token_expires", "DATETIME"),
     ])
     db.session.execute(text(
         "CREATE INDEX IF NOT EXISTS idx_users_email_verification_token "
         "ON users(email_verification_token)"
+    ))
+    db.session.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_users_password_reset_token "
+        "ON users(password_reset_token)"
     ))
     db.session.commit()
     db.session.execute(text(
@@ -975,6 +986,138 @@ def verify_email(token):
     db.session.commit()
     flash("Email verified — you can now generate quotes.", "success")
     return redirect(url_for("index"))
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+@limiter.limit("3 per hour", methods=["POST"])
+def forgot_password():
+    """
+    Hotfix-3 T3: password reset request.
+
+    On POST: ALWAYS flashes the same success message regardless of
+    whether the email exists. This is the standard pattern to close
+    the enumeration vector — an attacker can't probe which addresses
+    are registered by watching for different responses.
+
+    If the email DOES match a user, we issue a 1-hour reset token and
+    email the link. If not, we silently do nothing (no DB write, no
+    email send). The 1-hour window is tighter than the 24h verify
+    expiry because reset links are higher-value and short windows
+    limit the blast radius if the email gets forwarded.
+
+    Rate-limited 3/hour/IP via Flask-Limiter to slow down enumeration
+    attempts that try thousands of emails looking for response timing
+    deltas.
+    """
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        email = (request.form.get("email") or "").strip().lower()
+        user = User.query.filter_by(email=email).first() if email else None
+        if user:
+            token = uuid.uuid4().hex
+            user.password_reset_token = token
+            user.password_reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+            db.session.commit()
+            reset_url = url_for("reset_password", token=token, _external=True)
+            app.logger.info(
+                "[PASSWORD-RESET] issued for user_id=%s email=%s reset_url=%s",
+                user.id, user.email, reset_url,
+            )
+            mailer.send_email(
+                to=user.email,
+                subject="Reset your Window Quoting password",
+                html_body=render_template(
+                    "email/reset.html",
+                    reset_url=reset_url,
+                    support_email=config.SUPPORT_EMAIL,
+                ),
+                text_body=render_template(
+                    "email/reset.txt",
+                    reset_url=reset_url,
+                    support_email=config.SUPPORT_EMAIL,
+                ),
+            )
+        else:
+            # No-op for unknown emails. Log the attempt at INFO so abuse
+            # patterns are visible (high volume of unknown-email resets
+            # = enumeration probe), but DON'T differentiate the response.
+            app.logger.info(
+                "[PASSWORD-RESET] requested for unknown email=%r (no-op)",
+                email,
+            )
+
+        # Same flash regardless of whether email existed.
+        flash(
+            "If that email is registered, we've sent a reset link. Check "
+            "your inbox (and spam folder).",
+            "success",
+        )
+        return redirect(url_for("login"))
+
+    return render_template("forgot_password.html")
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+@limiter.limit("10 per hour", methods=["POST"])
+def reset_password(token):
+    """
+    Hotfix-3 T3: password reset completion.
+
+    Token validation: pulls the user by token, checks expiry. If either
+    fails, the form 404s (rather than 400) — 404 vs 400 doesn't leak
+    whether a specific token previously existed; the user just retries
+    the /forgot-password flow.
+
+    On successful POST: validates the new password against
+    _password_strength_error, sets it via set_password (rotates the
+    hash), clears the reset token, logs the user in, redirects to /.
+
+    Rotating password_hash invalidates any existing Flask-Login session
+    cookies on next request — sufficient session-invalidation for v1.
+    Explicit server-side session storage is a Sprint 8+ candidate.
+    """
+    user = User.query.filter_by(password_reset_token=token).first()
+    if not user:
+        abort(404)
+    if not user.password_reset_token_expires or \
+            user.password_reset_token_expires < datetime.utcnow():
+        # Expired tokens get the same 404 — don't differentiate between
+        # "never existed" and "expired" via response code.
+        abort(404)
+
+    if request.method == "POST":
+        password = request.form.get("password") or ""
+        pw_error = _password_strength_error(password)
+        if pw_error:
+            flash(pw_error, "error")
+            return render_template("reset_password.html")
+
+        user.set_password(password)
+        user.password_reset_token = None
+        user.password_reset_token_expires = None
+        # Reset clears the login-lockout counter (the user has proven
+        # mailbox control, which is at least as strong as a successful
+        # login for unlock purposes).
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.session.commit()
+
+        app.logger.info(
+            "[PASSWORD-RESET] completed for user_id=%s email=%s",
+            user.id, user.email,
+        )
+
+        # Log them in immediately so they don't have to type the new
+        # password they just chose.
+        login_user(user)
+        from flask import session as _session
+        _session.permanent = True
+        flash("Password updated. You're signed in.", "success")
+        return redirect(url_for("index"))
+
+    return render_template("reset_password.html")
 
 
 @app.route("/resend-verification", methods=["POST"])

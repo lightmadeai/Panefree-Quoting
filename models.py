@@ -49,6 +49,13 @@ class User(UserMixin, db.Model):
     email_verified = db.Column(db.Boolean, nullable=False, default=False)
     email_verification_token = db.Column(db.Text, nullable=True, index=True)
     email_verification_token_expires = db.Column(db.DateTime, nullable=True)
+    # Hotfix-3 T3: password reset tokens. Same shape as the email
+    # verification token (32-char uuid hex, single-use, expires) but with
+    # a tighter 1-hour expiry — reset links are higher-value and
+    # short-lived limits the blast radius if a user forwards the email.
+    # Indexed for the lookup-by-token query in /reset-password/<token>.
+    password_reset_token = db.Column(db.Text, nullable=True, index=True)
+    password_reset_token_expires = db.Column(db.DateTime, nullable=True)
     business_name = db.Column(db.Text, nullable=True)
     phone_number = db.Column(db.Text, nullable=True)
     # NULL means "use sovereign default"; non-NULL is the user's customized

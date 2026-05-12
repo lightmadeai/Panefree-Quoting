@@ -1,0 +1,13 @@
+Reset your Window Quoting password
+
+We received a request to reset the password on your Window Quoting
+account. Open the link below to set a new one. The link expires in 1 hour.
+
+{{ reset_url }}
+
+Didn't request a password reset? You can safely ignore this email —
+your password won't change unless you click the link above and set a
+new one. The link expires in 1 hour either way.
+
+If you're seeing repeated reset emails you didn't request, please write
+to {{ support_email }}.

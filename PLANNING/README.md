@@ -134,7 +134,20 @@ Jade owns the sprint counter. `next_sprint` number is tracked in this file (see 
 ### 5.9 Audit SLA
 Inquisitor pre-audits within **4 hours** during active hours (08:00-23:00 Pacific). Outside active hours, audits queue for the next active window. No SLA clock for side hustle bandwidth — this is a target, not a contract.
 
-### 5.10 RAM coordination
+### 5.11 Automatic promotion after post-audit PASS
+
+During Stabilize phase (hotfix-N), when a post-audit results in **PASS**, the next approved hotfix in the pipeline is **automatically promoted** to `current-sprint.md` without waiting for manual intervention. The promotion sequence is:
+
+1. Inquisitor writes audit report to `PLANNING/audits/hotfix-N-audit.md`
+2. Inquisitor archives completed sprint to `PLANNING/done/hotfix-N.md`
+3. **Auto-promote:** Jade copies `drafts/hotfix-N+1.md` content to `current-sprint.md`, sets `status: in-progress`, and updates pipeline status
+4. Jade notifies Chris in `#general-communications` that the next hotfix is ready for Claude
+
+This applies only when the post-audit verdict is PASS with **no hard blockers**. If the audit has hard blockers (verdict: CONTESTED or REJECT), promotion is held until remediation.
+
+Non-blocking remarks (R1, R2, etc.) do NOT block promotion — they are carried forward into the next sprint's notes.
+
+### 5.12 RAM coordination
 Jade heartbeat pauses during active Claude execution. No concurrent Inquisitor heavy ops (audits, large reads) while Claude Code is mid-sprint. Daily Purge at 2AM is safe — no sprints should be active during quiet hours.
 
 ## 6. Status Definitions
@@ -281,4 +294,4 @@ Completion reports ensure Chris is always informed of outcomes, not just "it pas
 
 ---
 
-<!-- Protocol v1.3 — 2026-05-12 — Adds §14 Completion Reports. -->
+<!-- Protocol v1.4 — 2026-05-12 — Adds §5.5 Audit Canonicality, §5.11 Automatic Promotion, §14 Completion Reports. -->

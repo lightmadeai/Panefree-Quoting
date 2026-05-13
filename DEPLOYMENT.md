@@ -278,6 +278,12 @@ Every `app.logger.warning` and `app.logger.error` line in `app.py` carries a str
 | `[STRIPE-WEBHOOK]` | INFO | Signature-verified webhook event received | Forensic — pair with Stripe Dashboard event log via event_id |
 | `[STRIPE-CANCEL-FAILED]` | ERROR | Account delete proceeded but Stripe sub cancel API failed | Also emailed to `ADMIN_EMAIL`; manually cancel the subscription in Stripe Dashboard |
 | `[SENTRY-RATE-LIMITED]` | stderr | More than 500 events/hour to Sentry — drops happening | Investigate the underlying error storm; consider Sentry plan upgrade |
+| `[BACKUP-UPLOADED]` | stdout | Daily backup binary + schema dump uploaded successfully | Forensic — pair with heartbeat ping for full success signal |
+| `[BACKUP-DONE]` | stdout | Backup pipeline completed (snapshot + upload + prune + heartbeat) | Forensic — terminal success line |
+| `[BACKUP-PRUNED]` | stdout | Retention prune removed an old backup | Forensic; high volume = retention policy working as designed |
+| `[BACKUP-FAILED]` | stderr + email | Backup pipeline failed at some stage (snapshot, upload, or prune) | Email auto-fires to ADMIN_EMAIL; investigate via stage name in payload, re-run manually after fix |
+| `[BACKUP-ALERT-FAILED]` | stderr | Admin alert email itself failed to send after a BACKUP-FAILED | Check Postmark dashboard; non-fatal (cron exit code still flags the underlying failure) |
+| `[BACKUP-HEARTBEAT-FAILED]` | stderr | Backup succeeded but the UptimeRobot heartbeat ping failed | Non-fatal; check `BACKUP_HEARTBEAT_URL` env + UptimeRobot dashboard. Backup itself was successful. |
 
 **Where they go:** all `app.logger.*` calls emit to gunicorn's stdout/stderr in production. The hosting provider (Render / etc.) captures and rotates these — see Operations runbook (§10) for the log retention configuration.
 

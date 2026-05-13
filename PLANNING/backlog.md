@@ -16,6 +16,9 @@ Last updated: 2026-05-06
 - [x] OBS-002: Credit-refund non-atomic with quote rollback — add retry/comment on failed refund UPDATE (Hotfix-1 T5; try/except + [CREDIT-REFUND-FAILED] log; deliberately no retry)
 - [x] OBS-003: Session lifetime defaults to 31 days — set explicit `PERMANENT_SESSION_LIFETIME = timedelta(days=7)` in `config.py` (Hotfix-1 T2; actual prior value was 24h in app.py, moved to config.py)
 
+## P4 — Post-Launch Enhancements
+- [ ] **Dynamic Add-Ons**: Make add-ons customizable in UI and profile editor instead of hardcoded to 3 (Screen Cleaning, Track Cleaning, Hard Water Treatment). Scope: render quote form add-ons dynamically from profile `add_on_rates` keys, add/remove rows in profile editor, support arbitrary add-on names and prices. Engine (`engine.py`) already handles this — change is UI + profile management only. Estimated: 2 tasks.
+
 ## Ops — Deployment Tasks (pull after P2s clear)
 - [ ] Live Stripe key swap (test → live)
 - [ ] HTTPS enforcement (infrastructure config)

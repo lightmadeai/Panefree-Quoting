@@ -1,41 +1,44 @@
 ---
-label: hotfix-5
+label: hotfix-6
 project: window-quoting
 phase: stabilize
-drafted_by: Claude (proposal), Jade (adoption with Inquisitor conditions)
+drafted_by: Claude (proposal as sprint-5-ops), Jade (adoption + renumber as hotfix-6 with Inquisitor conditions)
 adopted_by: Jade
-status: done
-completed: 2026-05-12
-audit_status: pass
-audit_note: "All 4 tasks landed. Backup pipeline exercised end-to-end via T3 restore drill (row counts matched live exactly). Regression clean (34/34 unit tests + 13/13 stress probes + locust 2426 reqs 0 failures + pip-audit clean). Awaiting Inquisitor post-audit."
+status: in-progress
+audit_status: approved
 created: 2026-05-12
-depends_on: hotfix-3 (mailer.py admin alerts on backup failure)
-next_up: hotfix-6
+depends_on: hotfix-5 (done, PASS)
+next_up: production-launch
 ---
 
-# Current Sprint: Hotfix-5 — Backup, Restore & Schema Dump
+# Current Sprint: Hotfix-6 — Production Gate
 
-**Full draft:** `PLANNING/drafts/hotfix-5.md`
-**Close-out report:** `PLANNING/done/hotfix-5.md`
-**Notes:** `PLANNING/notes/hotfix-5-notes.md`
-**Drill report:** `testing/restore-drill-2026-05.md`
+**Full draft:** `PLANNING/drafts/hotfix-6.md`
+**Audit report:** `PLANNING/audits/hotfix-5-audit.md` (H5 PASS)
 
 ## Pipeline Status
 - **Hotfix-2:** ✅ DONE, PASS
 - **Hotfix-3:** ✅ DONE, PASS (3 non-blocking remarks)
 - **Hotfix-4:** ✅ DONE, PASS (3 non-blocking remarks)
-- **Hotfix-5:** ✅ DONE — awaiting Inquisitor post-audit verdict
-- **Hotfix-6:** ⏳ READY (depends on H5 merge)
+- **Hotfix-5:** ✅ DONE, PASS (4 non-blocking remarks)
+- **Hotfix-6:** 🔧 IN PROGRESS — **THE LAUNCH GATE**
 
 ## Inquisitor Conditions (All Resolved)
-- H5 C1: B2 for backups (4.6x cheaper than S3)
-- H5 C2: Add schema dump alongside binary backup
+- C1: Relabeled as hotfix-6 under Stabilize — NOT a new Ops phase
+- C2: Live Stripe smoke test uses real card + refund
+- C3: Post-audit before DNS flip is MANDATORY — the audit IS the launch gate
 
 ## Carry-Forward Non-Blocking Remarks
-- H3 R1: `.env.example` missing H3 env vars (resolved)
+- H3 R1: `.env.example` missing H3 env vars
 - H3 R2: `test_account_lifecycle.py` doesn't exist yet
-- H4 R1: Per-worker rate limit (acceptable v1)
-- H4 R2: `/health` doesn't probe externals (by design)
+- H5 R1: `[BACKUP-*]` tags not in DEPLOYMENT.md log catalog
+- H5 R2: Real B2 round-trip not exercised in-sprint
+- H5 R3: Schema dumps accumulate without prune (negligible for v1)
+- H5 R4: No app-level functional restore test
 
-## Execution Order
-H5 → H6 (serial, Claude executes)
+## Pre-Launch Checklist (Chris-Sprint)
+- [x] Phase 1: Accounts (Postmark, Sentry, UptimeRobot, B2)
+- [x] Phase 2: DNS (DKIM, SPF, DMARC, Return-Path)
+- [ ] Phase 3: Stripe Live (blocked on H3+H4+H5 merge)
+- [ ] Phase 4: Legal (Cookie Policy still needed)
+- [ ] Phase 5: DNS Flip → Production

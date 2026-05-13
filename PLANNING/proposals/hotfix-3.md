@@ -2,16 +2,10 @@
 label: hotfix-3
 project: window-quoting
 phase: stabilize
-drafted_by: Claude (proposal), Jade (adoption with Inquisitor conditions)
-adopted_by: Jade
-status: ready
-audit_status: pre-approved (conditional)
+drafted_by: Claude (proposal for Jade, 2026-05-12)
+status: draft
+audit_status: draft
 created: 2026-05-12
-depends_on: hotfix-2 (merged)
-inquisitor_conditions:
-  C1: "/resend-verification is logged-in-only — no email param (enumeration risk)"
-  C2: "Account deletion is hard delete with audit log, not soft delete (GDPR compliance, Stripe holds billing records)"
-  C3: "Postmark confirmed for v1 — best deliverability, simplest setup, 100/mo free tier"
 ---
 
 # Hotfix-3 — User Access Lifecycle: Email + Reset + Account Deletion
@@ -33,12 +27,6 @@ These three gaps must close before launch.
 - Users can self-serve account deletion, including Stripe subscription cancellation
 - All transactional emails flow through a single backend so deliverability + observability live in one place
 
-## Inquisitor Conditions (RESOLVED)
-
-- **C1:** `/resend-verification` → **logged-in-only**. No email parameter. The resend link appears in the EMAIL_NOT_VERIFIED banner visible only to authenticated unverified users.
-- **C2:** Account deletion → **hard delete with audit log**. GDPR Article 17 requires erasure without undue delay. `deleted_at` soft-delete is a compliance liability unless justified by legitimate interest. `[ACCOUNT-DELETED]` audit log provides the trail. Stripe holds canonical billing records.
-- **C3:** **Postmark confirmed.** Transactional-only, 100/mo free tier, best deliverability reputation. SES requires DNS-heavy setup; SendGrid has worse deliverability on free tier. Revisit only if volume exceeds Postmark pricing thresholds.
-
 ## Tasks
 
 ### T1: Email backend integration (Postmark)
@@ -46,7 +34,8 @@ These three gaps must close before launch.
 **acceptance:**
 - New `mailer.send_email(to, subject, html_body, text_body)` helper using
   Postmark's HTTP API (NOT SMTP — fewer auth headaches, better deliverability
-  tracking).
+  tracking). Postmark chosen over SendGrid for transactional-only reliability
+  and the cleaner free tier (100/mo free, $15/mo for 10k after).
 - `POSTMARK_SERVER_TOKEN`, `EMAIL_FROM`, `EMAIL_FROM_NAME` env vars added;
   missing token raises at boot in non-DEV_MODE, logs warning in dev.
 - New `MAIL_DISABLED=1` env (matching the WTF_CSRF_DISABLED / RATELIMIT_DISABLED
@@ -67,8 +56,7 @@ These three gaps must close before launch.
   re-send) but a flash informs them.
 - New `/resend-verification` route (rate-limited to 3/hour per IP via
   Flask-Limiter from Hotfix-2) that generates a fresh token + sends
-  the email. **LOGGED-IN ONLY** — no email parameter (Inquisitor C1).
-  Linked from a banner on pages that 403 with `EMAIL_NOT_VERIFIED`.
+  the email. Linked from a banner on pages that 403 with `EMAIL_NOT_VERIFIED`.
 - Verification email body: subject "Verify your Window Quoting email",
   clickable link to `/verify/<token>`, 24h expiry note, plain-text fallback.
 - Email template stored as Jinja2 partials in `templates/email/verify.html` +
@@ -81,7 +69,8 @@ These three gaps must close before launch.
 **acceptance:**
 - New columns: `password_reset_token TEXT NULL` (indexed),
   `password_reset_token_expires DATETIME NULL`. Same migration pattern
-  as the verification columns.
+  as the verification columns. Added to `_SCHEMA_TABLE_ALLOWLIST` is
+  unnecessary since `users` is already in the allowlist.
 - `/forgot-password` GET renders form; POST takes email, generates uuid hex
   token (1h expiry), emails reset link. ALWAYS returns the same flash
   regardless of whether email exists (no enumeration leak).
@@ -103,11 +92,13 @@ These three gaps must close before launch.
   `subscription_id` present (best-effort; logs `[STRIPE-CANCEL-FAILED]` +
   alerts admin if it errors but proceeds with deletion — the user has the
   right to leave regardless).
-- **HARD DELETE** (Inquisitor C2): Cascades through quotes, profiles, transactions,
-  contact_submissions via SQLAlchemy `cascade="all, delete-orphan"`.
+- Cascades through quotes, profiles, transactions, contact_submissions
+  via SQLAlchemy `cascade="all, delete-orphan"` (already set on profiles;
+  add to quotes / transactions / contact_submissions relationships).
 - Deletes the per-user PDF bucket: `shutil.rmtree(_user_pdf_dir(uid))`.
 - Logs `[ACCOUNT-DELETED]` audit line with user_id, email, sub_id.
-- Sends a final "your account is closed" confirmation email via T1's backend.
+- Sends a final "your account is closed" confirmation email via T1's
+  backend.
 
 ### T5: Wire remaining transactional emails through the backend
 **touches:** `app.py` (contact form, refund-failure admin notify)
@@ -129,6 +120,19 @@ These three gaps must close before launch.
   monitor manually for v1)
 - Two-factor auth (Sprint 8+)
 - Session-storage refactor (currently cookie-only; fine for v1)
+
+## Open questions for Jade / Inquisitor
+
+- Is Postmark the right choice, or do you have a preferred provider?
+  (Postmark vs SendGrid vs SES vs Mailgun — all viable; Postmark
+  recommended for solo-ops transactional simplicity.)
+- For account deletion: hard delete or soft delete (set `deleted_at`
+  and exclude from queries)? Proposal: hard delete for GDPR cleanliness,
+  but Inquisitor's call on whether audit-trail retention overrides.
+- Should `/resend-verification` require the user to be logged in (since
+  they likely have an unverified session active) or accept an email
+  parameter? Proposal: logged-in-only — simpler and avoids enumeration
+  via the resend path.
 
 ## Definition of done
 

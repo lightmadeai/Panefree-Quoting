@@ -4,7 +4,7 @@ from datetime import timedelta
 project_root = os.path.dirname(os.path.abspath(__file__))
 
 SECRET_KEY = os.environ.get("SRE_SECRET_KEY", "sre_secret_key_change_me_in_prod")
-DATABASE_PATH = os.path.join(project_root, "sovereign.db")
+DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(project_root, "sovereign.db"))
 SQLALCHEMY_DATABASE_URI = f"sqlite:///{DATABASE_PATH}"
 SQLALCHEMY_TRACK_MODIFICATIONS = False
 

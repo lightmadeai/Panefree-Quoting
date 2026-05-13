@@ -2544,7 +2544,7 @@ def stripe_webhook():
     # included so we can match against Stripe Dashboard's event log.
     app.logger.info(
         "[STRIPE-WEBHOOK] type=%s event_id=%s",
-        event_type, event.get("id"),
+        event_type, event["id"],
     )
 
     if event_type == "checkout.session.completed":

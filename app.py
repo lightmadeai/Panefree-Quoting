@@ -271,6 +271,14 @@ limiter = Limiter(
     enabled=os.environ.get("RATELIMIT_DISABLED", "").lower() not in ("1", "true", "yes"),
 )
 
+# Hotfix-6 T1: ProxyFix for reverse proxy headers.
+#
+# Without this, request.remote_addr = proxy IP, which means the rate
+# limiter gates the entire site on one global bucket. x_for=1 means
+# one trusted proxy layer (Render / nginx / Caddy). See DEPLOYMENT.md §8.
+from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
 # Hotfix-2 T4 (part 2): security response headers via Flask-Talisman.
 #
 # CSP allowlist matches the third-party assets actually loaded:
@@ -2752,6 +2760,45 @@ def account_delete():
 @login_required
 def settings():
     return redirect(url_for("profiles_list"))
+
+
+# ---------- Legal page routes (Hotfix-6 T1) ----------
+#
+# Static HTML served from the legal/ directory. These route to the
+# Termly-generated policy documents required for production.
+# Post-launch (P4): swap these for Termly JS embed + cookie consent banner.
+
+LEGAL_DIR = os.path.join(project_root, "legal")
+
+
+@app.route("/legal/privacy")
+def legal_privacy():
+    """Privacy Policy — required for production (H01 legal blocker)."""
+    path = os.path.join(LEGAL_DIR, "privacy-policy.html")
+    if not os.path.exists(path):
+        abort(404)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/legal/terms")
+def legal_terms():
+    """Terms of Service — required for production (H02 legal blocker)."""
+    path = os.path.join(LEGAL_DIR, "terms-of-service.html")
+    if not os.path.exists(path):
+        abort(404)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/legal/cookies")
+def legal_cookies():
+    """Cookie Policy — required for production (H03 legal blocker)."""
+    path = os.path.join(LEGAL_DIR, "cookie-policy.html")
+    if not os.path.exists(path):
+        abort(404)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 if __name__ == "__main__":

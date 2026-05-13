@@ -43,6 +43,9 @@ sentry-sdk[flask]~=2.59.0
 # needed for the cron job too.
 b2sdk~=2.12.0
 
+# --- WSGI server (Hotfix-6 T1) ---
+gunicorn~=23.0.0
+
 # --- Stripe billing ---
 stripe~=15.1.0
 

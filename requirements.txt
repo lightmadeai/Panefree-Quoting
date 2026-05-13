@@ -35,6 +35,14 @@ flask-talisman~=1.1.0     # CSP / HSTS / X-Frame-Options / Referrer-Policy
 # so dev/test runs don't pollute the dashboard.
 sentry-sdk[flask]~=2.59.0
 
+# --- Backups (Hotfix-5) ---
+# Backblaze B2 SDK for scripts/backup.py upload target (Inquisitor C1
+# picked B2 over S3 for cost — 4.6x cheaper). Only used by the backup
+# script; the Flask app itself doesn't import b2sdk. Listed here so
+# `pip install -r requirements.txt` on the host installs everything
+# needed for the cron job too.
+b2sdk~=2.12.0
+
 # --- Stripe billing ---
 stripe~=15.1.0
 

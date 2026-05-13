@@ -278,6 +278,12 @@ Every `app.logger.warning` and `app.logger.error` line in `app.py` carries a str
 | `[STRIPE-WEBHOOK]` | INFO | Signature-verified webhook event received | Forensic — pair with Stripe Dashboard event log via event_id |
 | `[STRIPE-CANCEL-FAILED]` | ERROR | Account delete proceeded but Stripe sub cancel API failed | Also emailed to `ADMIN_EMAIL`; manually cancel the subscription in Stripe Dashboard |
 | `[SENTRY-RATE-LIMITED]` | stderr | More than 500 events/hour to Sentry — drops happening | Investigate the underlying error storm; consider Sentry plan upgrade |
+| `[BACKUP-UPLOADED]` | stdout | Daily backup binary + schema dump uploaded successfully | Forensic — pair with heartbeat ping for full success signal |
+| `[BACKUP-DONE]` | stdout | Backup pipeline completed (snapshot + upload + prune + heartbeat) | Forensic — terminal success line |
+| `[BACKUP-PRUNED]` | stdout | Retention prune removed an old backup | Forensic; high volume = retention policy working as designed |
+| `[BACKUP-FAILED]` | stderr + email | Backup pipeline failed at some stage (snapshot, upload, or prune) | Email auto-fires to ADMIN_EMAIL; investigate via stage name in payload, re-run manually after fix |
+| `[BACKUP-ALERT-FAILED]` | stderr | Admin alert email itself failed to send after a BACKUP-FAILED | Check Postmark dashboard; non-fatal (cron exit code still flags the underlying failure) |
+| `[BACKUP-HEARTBEAT-FAILED]` | stderr | Backup succeeded but the UptimeRobot heartbeat ping failed | Non-fatal; check `BACKUP_HEARTBEAT_URL` env + UptimeRobot dashboard. Backup itself was successful. |
 
 **Where they go:** all `app.logger.*` calls emit to gunicorn's stdout/stderr in production. The hosting provider (Render / etc.) captures and rotates these — see Operations runbook (§10) for the log retention configuration.
 
@@ -385,7 +391,117 @@ When the operator role grows beyond one person (e.g. you hire someone), this sec
 
 ---
 
-## 11. Open items for Sprint 5
+## 11. Backups + restore drill (Hotfix-5)
+
+SQLite is a single file. Losing it = losing every user, profile, quote, and transaction record. Stripe holds canonical billing data; reconstructing user identity + their business profiles from invoice metadata is a multi-week disaster. This section covers (a) the daily-backup automation, (b) the retention policy, (c) the restore procedure, and (d) the once-per-quarter drill.
+
+### 11.1 Daily backup automation
+
+`scripts/backup.py` runs the full pipeline: SQLite `.backup` (atomic online snapshot) → schema dump → gzip → upload to `BACKUP_DESTINATION` → retention prune → heartbeat ping.
+
+**Required env vars** (set in your hosting secrets store):
+
+| Var | Source | Notes |
+|---|---|---|
+| `BACKUP_DESTINATION` | choose | `b2://bucket-name/optional-prefix` (recommended per Inquisitor C1) |
+| `B2_KEY_ID` | Backblaze console → App Keys | Scope key to the single backup bucket |
+| `B2_APPLICATION_KEY` | Backblaze console → App Keys | Paired with `B2_KEY_ID` |
+| `BACKUP_HEARTBEAT_URL` | UptimeRobot Heartbeat URL | Optional; if unset, no ping (alerting reduced) |
+
+**Scheduling** depends on host:
+
+| Host | How |
+|---|---|
+| **Render** | Add a Cron Job: command `python scripts/backup.py`, schedule `0 3 * * *` (daily 03:00 UTC), share env vars with the web service |
+| **Railway** | Similar; create a Cron Job under the service, set schedule via Railway dashboard |
+| **DO Droplet / Linode VPS** | `crontab -e` and add:<br/>`0 3 * * * cd /opt/window-quoting && /usr/bin/python3 scripts/backup.py >> /var/log/window-quoting-backup.log 2>&1` |
+
+**Expected behavior:**
+- Runtime: ~10 seconds for a small DB (<100 MB). Grows linearly with DB size.
+- Storage cost: ~3.6 GB / year of daily binary backups = $0.02/mo on B2 (well within free tier).
+- Schema dumps add ~10-20 KB each = negligible.
+
+### 11.2 Retention policy
+
+`scripts/backup.py` prunes the destination after each upload (skip with `--skip-prune`):
+
+| Slot | Kept | Window |
+|---|---|---|
+| Daily | All backups | Last 7 days |
+| Weekly | Earliest per ISO-week | Days 7-34 (~4 weeks) |
+| Monthly | Earliest per calendar month | Last 6 months |
+| Older | — | Deleted |
+
+Implemented as a pure function (`compute_retention_set`) with 10 unit tests in `testing/test_retention.py`. **First production run should use `--dry-run`** to confirm the prune list before any deletes are real:
+
+```bash
+BACKUP_DESTINATION=b2://my-bucket python scripts/backup.py --dry-run
+```
+
+### 11.3 Restore procedure
+
+`scripts/restore.py` is the inverse pipeline: download → gunzip → sanity check → schema parity check → write.
+
+**Standard restore (DR scenario):**
+
+```bash
+# 1. Restore to a sandbox path first — NEVER overwrite live sovereign.db
+#    on the first attempt
+python scripts/restore.py \
+  "b2://my-bucket/sovereign-YYYYMMDD-HHMMSS.db.gz" \
+  /tmp/restore-test.db
+
+# 2. Sanity-check the restored file
+python -c "
+import sqlite3
+c = sqlite3.connect('/tmp/restore-test.db')
+for t in ('users', 'quotes', 'pricing_profiles', 'transactions'):
+    print(t, c.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0])
+"
+
+# 3. If the row counts look right, stop the app and swap files:
+systemctl stop window-quoting    # or your host's equivalent
+cp sovereign.db sovereign.db.pre-restore-$(date +%Y%m%d-%H%M%S)
+cp /tmp/restore-test.db sovereign.db
+systemctl start window-quoting
+
+# 4. Verify the app boots and serves /health
+curl https://panefreequoting.com/health
+```
+
+`restore.py` refuses to overwrite `project_root/sovereign.db` directly unless `--force` is passed. The "restore to /tmp first, manually swap" pattern is intentional — gives an inspection window before pointing the live app at restored data.
+
+### 11.4 Quarterly restore drill
+
+**Run on the 1st of Jan / Apr / Jul / Oct.** Documented in `testing/restore-drill-YYYY-MM.md` (current: `testing/restore-drill-2026-05.md`). Procedure:
+
+1. Pick a backup from at least a week ago (proves retention is working)
+2. Restore to `/tmp/restore-test.db` via `scripts/restore.py`
+3. Confirm row counts match a known-good live snapshot
+4. Confirm schema parity check passed (restore.py exits 0, not 4)
+5. (Optional) Boot the Flask app pointed at the restored DB via env override, run `stress_probe.py`
+6. Tear down `/tmp/restore-test.db`
+7. Append a new section to the drill report file (or rotate the file if it grows large)
+
+The May 2026 drill ran end-to-end during Hotfix-5 T3 — see the drill report for the row-count match.
+
+### 11.5 Alerting
+
+Two layers, wire-compatible with Hotfix-4's observability stack:
+
+1. **Sentry capture on backup script crash.** `scripts/backup.py` calls `sentry_sdk.capture_exception` on any non-zero exit AND sends an admin email via `_notify_admin` (Hotfix-3 T5). Catches "the cron ran but the script crashed mid-run."
+2. **UptimeRobot Heartbeat on successful backup.** `BACKUP_HEARTBEAT_URL` is pinged at the end of every successful run. Configure UptimeRobot to alert if no ping arrives within **36 hours** — gives one missed day + recovery window before paging. Catches "cron daemon died silently," which Sentry can't see because the script never ran.
+
+**Setup steps for the UptimeRobot side:**
+1. UptimeRobot → + New Monitor → type: **Heartbeat**
+2. Friendly name: `Panefree Quotes — daily backup`
+3. Interval: 36 hours (so one missed day doesn't page; two does)
+4. Copy the generated heartbeat URL into `BACKUP_HEARTBEAT_URL` in your hosting secrets
+5. Set alert contacts the same as the /health monitor (§10.1)
+
+---
+
+## 12. Open items for Sprint 5
 
 These are intentionally not in Sprint 4's scope:
 

@@ -2538,6 +2538,16 @@ def stripe_webhook():
     event_type = event["type"]
     event_obj = event["data"]["object"]
 
+    # stripe-python's StripeObject is dict-like but does NOT expose .get();
+    # accessing event_obj.get(...) raises AttributeError via __getattr__.
+    # Convert to a plain dict (recursively) so every downstream handler
+    # can use familiar dict.get() semantics without each one re-learning
+    # this trap. Idempotent: if already a dict, leave it alone.
+    if hasattr(event_obj, "to_dict_recursive"):
+        event_obj = event_obj.to_dict_recursive()
+    elif hasattr(event_obj, "to_dict"):
+        event_obj = event_obj.to_dict()
+
     # Hotfix-4 T3: log every signature-verified webhook event we receive.
     # Pairs with the [STRIPE-CANCEL-FAILED] / Transaction-dedup paths to
     # give ops a full audit trail of "what Stripe told us." event_id

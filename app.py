@@ -844,7 +844,7 @@ def _send_verification_email(user, token):
     )
     return mailer.send_email(
         to=user.email,
-        subject="Verify your Window Quoting email",
+        subject="Verify your Panefree Quotes email",
         html_body=html_body,
         text_body=text_body,
     )
@@ -1058,7 +1058,7 @@ def forgot_password():
             )
             mailer.send_email(
                 to=user.email,
-                subject="Reset your Window Quoting password",
+                subject="Reset your Panefree Quotes password",
                 html_body=render_template(
                     "email/reset.html",
                     reset_url=reset_url,
@@ -2510,7 +2510,7 @@ def account_delete():
         # confirmation in their inbox.
         mailer.send_email(
             to=deleted_email,
-            subject="Your Window Quoting account is closed",
+            subject="Your Panefree Quotes account is closed",
             html_body=render_template(
                 "email/account_closed.html",
                 closed_email=deleted_email,

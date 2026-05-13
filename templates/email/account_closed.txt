@@ -1,6 +1,6 @@
-Your Window Quoting account is closed
+Your Panefree Quotes account is closed
 
-We've closed the Window Quoting account for {{ closed_email }}. Your
+We've closed the Panefree Quotes account for {{ closed_email }}. Your
 quote history, pricing profiles, and saved PDFs have been permanently
 deleted.
 

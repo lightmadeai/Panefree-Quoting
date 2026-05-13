@@ -19,7 +19,7 @@ All configuration lives in `config.py` and reads from `os.environ` at boot. Copy
 | `WTF_CSRF_DISABLED` | Test only | `1` disables CSRF token enforcement so the existing `testing/stress_probe.py` + locust harness POSTs work without per-form token fetches. Loud `WARNING` logged at boot when set. **NEVER set in production.** |
 | `RATELIMIT_DISABLED` | Test only | `1` disables Flask-Limiter so locust can hammer `/login`/`/register` without tripping the IP gate. **NEVER set in production.** |
 | `SOFT_CAP_THRESHOLD` | Optional | Annual subscribers' soft-cap notice fires at this number of quotes per billing period. Default 1000. The 80% warning is computed from this value (`threshold * 8 // 10`). |
-| `SUPPORT_EMAIL` | Optional | Surface address for the contact CTA + footer. Default `support@windowquoting.com`. |
+| `SUPPORT_EMAIL` | Optional | Surface address for the contact CTA + footer. Default `support@panefreequoting.com` (Hotfix-4 T0 — was `support@windowquoting.com` pre-domain-decision). |
 | `RATE_LIMIT_QUOTES_PER_HOUR` | Optional | Free-tier quote-generation rate limit per rolling 60-min window. Default 10. Separate from the Hotfix-2 Flask-Limiter gates on auth routes. |
 
 ---

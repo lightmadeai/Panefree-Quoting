@@ -1026,6 +1026,14 @@ def register():
         db.session.add(user)
         db.session.commit()  # commit before _issue_verification_token so user.id exists
 
+        # Hotfix-4 T3: happy-path log for the signup funnel. Lets ops
+        # answer "how many signups happened today" from logs without
+        # touching the DB, and pairs with [EMAIL-VERIFICATION] /
+        # [LOGIN-SUCCESS] for a complete user-lifecycle trail.
+        app.logger.info(
+            "[REGISTER-SUCCESS] user_id=%s email=%s", user.id, user.email,
+        )
+
         # BUG-003 (Sprint 4): new users no longer get auto-seeded starter
         # profiles. The first hit to "/" redirects them into /profiles/new
         # so the first profile creation IS the onboarding step.
@@ -1112,6 +1120,13 @@ def login():
         # See /register for the full rationale.
         from flask import session as _session
         _session.permanent = True
+        # Hotfix-4 T3: happy-path log for forensic depth. Pairs with the
+        # implicit auth-failure path (Flask-Login redirect to /login) so
+        # ops can see a "user X logged in at T" trail without needing
+        # Sentry depth on every successful auth.
+        app.logger.info(
+            "[LOGIN-SUCCESS] user_id=%s email=%s", user.id, user.email,
+        )
         return redirect(url_for("index"))
 
     return render_template("login.html")
@@ -2514,6 +2529,15 @@ def stripe_webhook():
 
     event_type = event["type"]
     event_obj = event["data"]["object"]
+
+    # Hotfix-4 T3: log every signature-verified webhook event we receive.
+    # Pairs with the [STRIPE-CANCEL-FAILED] / Transaction-dedup paths to
+    # give ops a full audit trail of "what Stripe told us." event_id
+    # included so we can match against Stripe Dashboard's event log.
+    app.logger.info(
+        "[STRIPE-WEBHOOK] type=%s event_id=%s",
+        event_type, event.get("id"),
+    )
 
     if event_type == "checkout.session.completed":
         if event_obj.get("mode") == "subscription":

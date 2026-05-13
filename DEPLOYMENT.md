@@ -255,7 +255,37 @@ Without `ProxyFix`, every request looks like it came from the proxy's single IP 
 
 ---
 
-## 9. Open items for Sprint 5
+## 9. Log catalog (Hotfix-4 T3)
+
+Every `app.logger.warning` and `app.logger.error` line in `app.py` carries a structured `[TAG]` prefix so log searches are deterministic. This catalog is the source of truth for "what does this log line mean and how do I respond." Sentry alert rules (Operations runbook §10) key off these tags.
+
+| Tag | Level | Meaning | Suggested response |
+|---|---|---|---|
+| `[CSRF]` | WARNING | `WTF_CSRF_DISABLED=1` set at boot — test escape hatch active | If seen in production: deploy is misconfigured; unset the env var and restart |
+| `[MAIL]` (disabled) | WARNING | `MAIL_DISABLED=1` set at boot — no emails will send | If seen in production: deploy is misconfigured; unset the env var and restart |
+| `[MAIL]` (token missing) | ERROR | `POSTMARK_SERVER_TOKEN` unset in production | Set `POSTMARK_SERVER_TOKEN` and restart — new users can't satisfy email_verified gate |
+| `[REGISTER-SUCCESS]` | INFO | New account created | Forensic / funnel metric — no action |
+| `[LOGIN-SUCCESS]` | INFO | User logged in | Forensic — no action |
+| `[EMAIL-VERIFICATION]` | INFO | Verification token issued or re-issued | Forensic — verify URL captured as fallback if email failed |
+| `[EMAIL-SENT]` | INFO | Postmark accepted a transactional message | Forensic — Postmark dashboard is canonical |
+| `[EMAIL-SEND-FAILED]` | ERROR | Postmark rejected or network call failed | Check Postmark dashboard, verify `POSTMARK_SERVER_TOKEN` + `EMAIL_FROM` sender signature |
+| `[MAIL-DISABLED]` | INFO | Would-have-sent line from mailer in test mode | Forensic; should never appear in prod |
+| `[PASSWORD-RESET]` | INFO | Reset request received (issued, completed, or no-op for unknown email) | Forensic; high volume of unknown-email requests = enumeration probe → investigate IP |
+| `[ACCOUNT-DELETED]` | INFO | User self-deleted their account | Forensic audit trail; one record per deletion |
+| `[ACCOUNT-DELETE-PDF-CLEANUP]` | WARNING | PDF bucket cleanup failed after account delete | Manually `rm -rf output/<user_id>/` on the host |
+| `[CONTACT-SUBMISSION]` | INFO | Custom-plan inquiry from soft-cap CTA | Also emailed to `ADMIN_EMAIL` (T5/H3); reply same-day |
+| `[CREDIT-REFUND-FAILED]` | ERROR | `/generate` failed AND credit refund UPDATE also failed | Also emailed to `ADMIN_EMAIL`; manually `+1 credit_balance` on the user_id |
+| `[STRIPE-WEBHOOK]` | INFO | Signature-verified webhook event received | Forensic — pair with Stripe Dashboard event log via event_id |
+| `[STRIPE-CANCEL-FAILED]` | ERROR | Account delete proceeded but Stripe sub cancel API failed | Also emailed to `ADMIN_EMAIL`; manually cancel the subscription in Stripe Dashboard |
+| `[SENTRY-RATE-LIMITED]` | stderr | More than 500 events/hour to Sentry — drops happening | Investigate the underlying error storm; consider Sentry plan upgrade |
+
+**Where they go:** all `app.logger.*` calls emit to gunicorn's stdout/stderr in production. The hosting provider (Render / etc.) captures and rotates these — see Operations runbook (§10) for the log retention configuration.
+
+**What's NOT in the catalog:** routine 200 responses, debug-level lines, framework logs (werkzeug request lines, SQLAlchemy queries). Sentry handles uncaught exceptions; log catalog handles deliberate observability.
+
+---
+
+## 10. Open items for Sprint 5
 
 These are intentionally not in Sprint 4's scope:
 

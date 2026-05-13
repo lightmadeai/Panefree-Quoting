@@ -1977,6 +1977,51 @@ def top_up():
     )
 
 
+_APP_BOOT_TIME = time.monotonic()
+_APP_VERSION = _read_version_sha()
+
+
+@app.route("/health")
+@csrf.exempt
+@limiter.exempt
+def health():
+    """
+    Hotfix-4 T2: lightweight health endpoint for external uptime monitors
+    (UptimeRobot, etc.) and orchestrator readiness probes.
+
+    Returns JSON:
+      {"status": "ok",        "db": "ok",   "version": "<sha>", "uptime_s": N}   # 200
+      {"status": "degraded",  "db": "fail", "version": "<sha>", "uptime_s": N}   # 503
+
+    Intentionally does NOT touch Stripe / Postmark / Sentry — those are
+    external dependencies whose failures aren't application failures. The
+    page can still render and most user flows still work even if Stripe
+    is having an incident. UptimeRobot watches the app's own health;
+    Sentry's own dashboard / status page is the source for SaaS health.
+
+    No auth, no CSRF, no rate limit — the orchestrator and UptimeRobot
+    both need to hit this on every probe cycle without state. Talisman's
+    default response headers still apply.
+
+    DB check is a `SELECT 1`. Sub-50ms p95 in normal conditions.
+    """
+    db_ok = True
+    try:
+        db.session.execute(text("SELECT 1")).scalar()
+    except Exception:
+        db_ok = False
+
+    uptime_s = int(time.monotonic() - _APP_BOOT_TIME)
+    payload = {
+        "status": "ok" if db_ok else "degraded",
+        "db": "ok" if db_ok else "fail",
+        "version": _APP_VERSION,
+        "uptime_s": uptime_s,
+    }
+    status_code = 200 if db_ok else 503
+    return jsonify(payload), status_code
+
+
 @app.route("/dev/sentry-test")
 def dev_sentry_test():
     """

@@ -305,7 +305,7 @@ _TALISMAN_CSP = {
     "frame-src": ["js.stripe.com"],
     "frame-ancestors": "'none'",
     "base-uri": "'self'",
-    "form-action": "'self'",
+    "form-action": ["'self'", "checkout.stripe.com"],
 }
 Talisman(
     app,

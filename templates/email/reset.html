@@ -1,0 +1,55 @@
+{#
+  Password reset email — HTML body. Variables: reset_url, support_email.
+  Tighter 1-hour expiry than the verify email; reset is higher-value and
+  short windows limit blast radius if the link gets forwarded.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Reset your Window Quoting password</title>
+</head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#1e293b;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="padding:32px 16px;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="520" cellpadding="0" cellspacing="0" border="0" style="max-width:520px;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
+                    <tr>
+                        <td style="padding:28px 32px 8px 32px;">
+                            <h1 style="margin:0 0 12px 0;font-size:22px;font-weight:700;color:#0f172a;">Reset your password</h1>
+                            <p style="margin:0 0 16px 0;font-size:15px;line-height:1.55;color:#334155;">
+                                We received a request to reset the password on your Window Quoting account. Click the button below to set a new one. The link expires in 1 hour.
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td align="center" style="padding:8px 32px 28px 32px;">
+                            <a href="{{ reset_url }}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;padding:12px 28px;border-radius:6px;">Reset password</a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:0 32px 28px 32px;">
+                            <p style="margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#64748b;">
+                                If the button doesn't work, copy and paste this URL into your browser:
+                            </p>
+                            <p style="margin:0 0 0 0;font-size:12px;line-height:1.5;color:#475569;word-break:break-all;">
+                                {{ reset_url }}
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:0 32px 28px 32px;border-top:1px solid #e2e8f0;">
+                            <p style="margin:16px 0 0 0;font-size:12px;line-height:1.5;color:#94a3b8;">
+                                Didn't request a password reset? You can safely ignore this email — your password won't change unless you click the link above and set a new one. The link expires in 1 hour either way.
+                            </p>
+                            <p style="margin:8px 0 0 0;font-size:12px;line-height:1.5;color:#94a3b8;">
+                                If you're seeing repeated reset emails you didn't request, please write to <a href="mailto:{{ support_email }}" style="color:#2563eb;">{{ support_email }}</a>.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

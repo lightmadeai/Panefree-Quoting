@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import json
+import shutil
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -57,6 +58,7 @@ from sqlalchemy.exc import IntegrityError
 import stripe
 
 import config
+import mailer
 from engine import calculate_quote
 from generator import (
     generate_document, derive_doc_code,
@@ -107,6 +109,26 @@ if os.environ.get("WTF_CSRF_DISABLED", "").lower() in ("1", "true", "yes"):
     app.logger.warning(
         "[CSRF] disabled via WTF_CSRF_DISABLED env — TEST USE ONLY. "
         "Production deploys MUST NOT set this variable."
+    )
+
+# Hotfix-3 T1: loud warning when MAIL_DISABLED is set so production
+# misconfiguration is impossible to miss in the boot log. Same shape
+# as the CSRF warning above.
+if config.MAIL_DISABLED:
+    app.logger.warning(
+        "[MAIL] disabled via MAIL_DISABLED env — TEST USE ONLY. "
+        "Production deploys MUST NOT set this variable."
+    )
+elif not config.POSTMARK_SERVER_TOKEN and not config.DEV_MODE:
+    # In prod (DEV_MODE unset, MAIL_DISABLED unset), missing Postmark
+    # token is a hard config error — the verification email path is
+    # unreachable, so no new user can satisfy the email_verified gate.
+    # Fail loud at boot rather than silently ship an unusable build.
+    app.logger.error(
+        "[MAIL] POSTMARK_SERVER_TOKEN is not set and we are not in DEV_MODE/"
+        "MAIL_DISABLED — /register will accept signups but no verification "
+        "emails will be delivered. Set POSTMARK_SERVER_TOKEN or restart "
+        "with DEV_MODE=1 / MAIL_DISABLED=1 for non-prod runs."
     )
 csrf = CSRFProtect(app)
 
@@ -325,10 +347,21 @@ with app.app_context():
         ("email_verified", "BOOLEAN NOT NULL DEFAULT 0"),
         ("email_verification_token", "TEXT"),
         ("email_verification_token_expires", "DATETIME"),
+        # Hotfix-3 T3: password reset tokens. Mirror the email_verification
+        # columns; same shape, separate column so a reset-link click can't
+        # accidentally satisfy the email-verification gate (different
+        # security domains: verify proves you own the email, reset proves
+        # you can read the inbox NOW).
+        ("password_reset_token", "TEXT"),
+        ("password_reset_token_expires", "DATETIME"),
     ])
     db.session.execute(text(
         "CREATE INDEX IF NOT EXISTS idx_users_email_verification_token "
         "ON users(email_verification_token)"
+    ))
+    db.session.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_users_password_reset_token "
+        "ON users(password_reset_token)"
     ))
     db.session.commit()
     db.session.execute(text(
@@ -737,6 +770,86 @@ def compute_internal_benchmark(user, current_pane_count, current_price):
 PASSWORD_MAX_LEN = 128
 
 
+def _issue_verification_token(user):
+    """
+    Generate a fresh verification token for `user`, persist it on the row,
+    and commit. Used by both /register (first-time) and /resend-verification
+    (re-issue). Token is 32-char uuid hex; expires 24h from issue.
+
+    Returns the token string so the caller can build the verify URL without
+    a second DB round-trip.
+    """
+    token = uuid.uuid4().hex
+    user.email_verification_token = token
+    user.email_verification_token_expires = datetime.utcnow() + timedelta(hours=24)
+    db.session.commit()
+    return token
+
+
+def _notify_admin(alert_tag, subject_summary, body_markdown):
+    """
+    Hotfix-3 T5: route an operational alert to ADMIN_EMAIL via the
+    same Postmark backend used for user-facing transactional mail.
+    Sites that call this also log structured tags (e.g. [CREDIT-REFUND-FAILED])
+    so the log + email are redundant — log for forensic depth, email so
+    the operator notices same-day instead of when they next tail the log.
+
+    Returns the mailer result (True/False) but callers SHOULD NOT branch
+    on it — admin alerts are best-effort by design; a failed alert send
+    must not cascade and break the primary flow (refund, delete, etc).
+    """
+    return mailer.send_email(
+        to=config.ADMIN_EMAIL,
+        subject=f"[{alert_tag}] {subject_summary}",
+        html_body=render_template(
+            "email/admin_alert.html",
+            alert_tag=alert_tag,
+            subject_summary=subject_summary,
+            body_markdown=body_markdown,
+        ),
+        text_body=render_template(
+            "email/admin_alert.txt",
+            alert_tag=alert_tag,
+            subject_summary=subject_summary,
+            body_markdown=body_markdown,
+        ),
+    )
+
+
+def _send_verification_email(user, token):
+    """
+    Send the email-verification message to `user`. Returns True on success,
+    False on send failure (mailer never raises, so neither do we).
+
+    The verify URL log line is kept as a fallback for ops debugging — if a
+    customer reports the email never arrived, ops can pull the most-recent
+    verify URL from the gunicorn log without needing DB access. Logged at
+    INFO so it's visible in normal log retention but doesn't trip Sentry
+    alerts. Postmark dashboard is the canonical record of delivery.
+    """
+    verify_url = url_for("verify_email", token=token, _external=True)
+    app.logger.info(
+        "[EMAIL-VERIFICATION] issued for user_id=%s email=%s verify_url=%s",
+        user.id, user.email, verify_url,
+    )
+    html_body = render_template(
+        "email/verify.html",
+        verify_url=verify_url,
+        support_email=config.SUPPORT_EMAIL,
+    )
+    text_body = render_template(
+        "email/verify.txt",
+        verify_url=verify_url,
+        support_email=config.SUPPORT_EMAIL,
+    )
+    return mailer.send_email(
+        to=user.email,
+        subject="Verify your Window Quoting email",
+        html_body=html_body,
+        text_body=text_body,
+    )
+
+
 def _password_strength_error(password):
     """T4 password rules: ≥8 chars AND ≥1 digit. Returns the error message
     to flash, or None if the password passes. Pure helper for testability.
@@ -781,27 +894,23 @@ def register():
             flash("That email is already registered.", "error")
             return render_template("register.html")
 
-        # Verification token — single-use, 24h expiry. Real email delivery
-        # is out of scope this sprint; we log the verify URL instead.
-        token = uuid.uuid4().hex
+        # Hotfix-3 T2: real verification email via Postmark. Pre-Hotfix-3
+        # the verify URL was only logged; users could never satisfy the
+        # email_verified gate unless ops manually pulled the log line.
         user = User(
             email=email,
             credit_balance=config.STARTING_CREDITS,
             email_verified=False,
-            email_verification_token=token,
-            email_verification_token_expires=datetime.utcnow() + timedelta(hours=24),
         )
         user.set_password(password)
         db.session.add(user)
-        db.session.commit()
+        db.session.commit()  # commit before _issue_verification_token so user.id exists
 
         # BUG-003 (Sprint 4): new users no longer get auto-seeded starter
         # profiles. The first hit to "/" redirects them into /profiles/new
         # so the first profile creation IS the onboarding step.
-        verify_url = url_for("verify_email", token=token, _external=True)
-        app.logger.info(
-            "[EMAIL-VERIFICATION] new user %s — verify URL: %s", email, verify_url,
-        )
+        token = _issue_verification_token(user)
+        sent = _send_verification_email(user, token)
         login_user(user)
         # DO NOT REMOVE — required for PERMANENT_SESSION_LIFETIME to apply.
         # Flask only honors the configured lifetime when session.permanent is
@@ -809,11 +918,23 @@ def register():
         # the 7-day cap (config.py) becomes a no-op.
         from flask import session as _session
         _session.permanent = True
-        flash(
-            "Account created. Check your email for a verification link before "
-            "generating quotes.",
-            "success",
-        )
+        if sent:
+            flash(
+                "Account created. Check your email for a verification link "
+                "before generating quotes.",
+                "success",
+            )
+        else:
+            # Send failed but user row + token persist — they can click the
+            # resend banner from the EMAIL_NOT_VERIFIED page. Don't roll back
+            # the registration; losing the account on a transient email
+            # outage is worse than the inconvenience of one resend click.
+            flash(
+                "Account created, but we couldn't send your verification "
+                "email just now. Try the resend link, or contact support if "
+                "the problem persists.",
+                "error",
+            )
         return redirect(url_for("index"))
 
     return render_template("register.html")
@@ -895,6 +1016,174 @@ def verify_email(token):
     user.email_verification_token_expires = None
     db.session.commit()
     flash("Email verified — you can now generate quotes.", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+@limiter.limit("3 per hour", methods=["POST"])
+def forgot_password():
+    """
+    Hotfix-3 T3: password reset request.
+
+    On POST: ALWAYS flashes the same success message regardless of
+    whether the email exists. This is the standard pattern to close
+    the enumeration vector — an attacker can't probe which addresses
+    are registered by watching for different responses.
+
+    If the email DOES match a user, we issue a 1-hour reset token and
+    email the link. If not, we silently do nothing (no DB write, no
+    email send). The 1-hour window is tighter than the 24h verify
+    expiry because reset links are higher-value and short windows
+    limit the blast radius if the email gets forwarded.
+
+    Rate-limited 3/hour/IP via Flask-Limiter to slow down enumeration
+    attempts that try thousands of emails looking for response timing
+    deltas.
+    """
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+
+    if request.method == "POST":
+        email = (request.form.get("email") or "").strip().lower()
+        user = User.query.filter_by(email=email).first() if email else None
+        if user:
+            token = uuid.uuid4().hex
+            user.password_reset_token = token
+            user.password_reset_token_expires = datetime.utcnow() + timedelta(hours=1)
+            db.session.commit()
+            reset_url = url_for("reset_password", token=token, _external=True)
+            app.logger.info(
+                "[PASSWORD-RESET] issued for user_id=%s email=%s reset_url=%s",
+                user.id, user.email, reset_url,
+            )
+            mailer.send_email(
+                to=user.email,
+                subject="Reset your Window Quoting password",
+                html_body=render_template(
+                    "email/reset.html",
+                    reset_url=reset_url,
+                    support_email=config.SUPPORT_EMAIL,
+                ),
+                text_body=render_template(
+                    "email/reset.txt",
+                    reset_url=reset_url,
+                    support_email=config.SUPPORT_EMAIL,
+                ),
+            )
+        else:
+            # No-op for unknown emails. Log the attempt at INFO so abuse
+            # patterns are visible (high volume of unknown-email resets
+            # = enumeration probe), but DON'T differentiate the response.
+            app.logger.info(
+                "[PASSWORD-RESET] requested for unknown email=%r (no-op)",
+                email,
+            )
+
+        # Same flash regardless of whether email existed.
+        flash(
+            "If that email is registered, we've sent a reset link. Check "
+            "your inbox (and spam folder).",
+            "success",
+        )
+        return redirect(url_for("login"))
+
+    return render_template("forgot_password.html")
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+@limiter.limit("10 per hour", methods=["POST"])
+def reset_password(token):
+    """
+    Hotfix-3 T3: password reset completion.
+
+    Token validation: pulls the user by token, checks expiry. If either
+    fails, the form 404s (rather than 400) — 404 vs 400 doesn't leak
+    whether a specific token previously existed; the user just retries
+    the /forgot-password flow.
+
+    On successful POST: validates the new password against
+    _password_strength_error, sets it via set_password (rotates the
+    hash), clears the reset token, logs the user in, redirects to /.
+
+    Rotating password_hash invalidates any existing Flask-Login session
+    cookies on next request — sufficient session-invalidation for v1.
+    Explicit server-side session storage is a Sprint 8+ candidate.
+    """
+    user = User.query.filter_by(password_reset_token=token).first()
+    if not user:
+        abort(404)
+    if not user.password_reset_token_expires or \
+            user.password_reset_token_expires < datetime.utcnow():
+        # Expired tokens get the same 404 — don't differentiate between
+        # "never existed" and "expired" via response code.
+        abort(404)
+
+    if request.method == "POST":
+        password = request.form.get("password") or ""
+        pw_error = _password_strength_error(password)
+        if pw_error:
+            flash(pw_error, "error")
+            return render_template("reset_password.html")
+
+        user.set_password(password)
+        user.password_reset_token = None
+        user.password_reset_token_expires = None
+        # Reset clears the login-lockout counter (the user has proven
+        # mailbox control, which is at least as strong as a successful
+        # login for unlock purposes).
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.session.commit()
+
+        app.logger.info(
+            "[PASSWORD-RESET] completed for user_id=%s email=%s",
+            user.id, user.email,
+        )
+
+        # Log them in immediately so they don't have to type the new
+        # password they just chose.
+        login_user(user)
+        from flask import session as _session
+        _session.permanent = True
+        flash("Password updated. You're signed in.", "success")
+        return redirect(url_for("index"))
+
+    return render_template("reset_password.html")
+
+
+@app.route("/resend-verification", methods=["POST"])
+@login_required
+@limiter.limit("3 per hour")
+def resend_verification():
+    """
+    Hotfix-3 T2 (Inquisitor C1): logged-in-only resend of the verification
+    email. No email parameter — the user must already be authenticated as
+    the address they want re-verified. This closes the enumeration vector
+    (an anonymous /resend?email=... would let an attacker probe which
+    addresses are registered).
+
+    No-op for already-verified users — they just get a redirect to /.
+    Rate-limited 3/hour/IP via Flask-Limiter (Hotfix-2 T4).
+    """
+    user = db.session.get(User, current_user.id)
+    if user.email_verified:
+        flash("Your email is already verified.", "info")
+        return redirect(url_for("index"))
+
+    token = _issue_verification_token(user)
+    sent = _send_verification_email(user, token)
+    if sent:
+        flash(
+            "Verification email sent. Check your inbox (and spam folder) — "
+            "the link expires in 24 hours.",
+            "success",
+        )
+    else:
+        flash(
+            "We couldn't send the verification email just now. Try again "
+            "in a few minutes, or contact support.",
+            "error",
+        )
     return redirect(url_for("index"))
 
 
@@ -1214,6 +1503,30 @@ def generate():
                     "original_error=%r refund_error=%r — credit may be lost; "
                     "manual reconciliation required.",
                     current_user.id, str(e), str(refund_err),
+                )
+                # Hotfix-3 T5: also email admin same-day so the manual
+                # reconciliation actually happens rather than waiting on
+                # someone tailing the log. Best-effort — failure here is
+                # logged via mailer's own [EMAIL-SEND-FAILED] tag but
+                # MUST NOT raise (we're already in an exception handler
+                # for the refund failure).
+                _notify_admin(
+                    alert_tag="CREDIT-REFUND-FAILED",
+                    subject_summary=f"Manual reconcile needed for user {current_user.id}",
+                    body_markdown=(
+                        f"User_id: {current_user.id}\n"
+                        f"Email: {current_user.email}\n"
+                        f"\n"
+                        f"The /generate path failed AND the credit refund\n"
+                        f"path also failed. The user has been charged a\n"
+                        f"credit for a quote they did not receive.\n"
+                        f"\n"
+                        f"Original error: {e!r}\n"
+                        f"Refund error:   {refund_err!r}\n"
+                        f"\n"
+                        f"Action: manually +1 credit_balance on user_id\n"
+                        f"  {current_user.id} via sqlite3 / admin tooling.\n"
+                    ),
                 )
         return jsonify({"status": "error", "message": str(e)}), 400
 
@@ -1744,13 +2057,29 @@ def contact():
         db.session.add(sub)
         db.session.commit()
 
-        # Admin notification — structured log line until an email backend
-        # exists. Future sprint replaces this with real delivery.
+        # Hotfix-3 T5: admin notification via Postmark. Log line is still
+        # emitted as forensic backup — the email gives the operator
+        # same-day awareness so high-volume inquiries don't sit unread.
         app.logger.info(
             "[CONTACT-SUBMISSION] from user_id=%s (%s): company=%r, "
             "volume=%r, growth=%r, contact_email=%r",
             current_user.id, current_user.email,
             company_name, current_volume, expected_growth, email,
+        )
+        _notify_admin(
+            alert_tag="CONTACT-SUBMISSION",
+            subject_summary=f"Custom plan inquiry from {company_name}",
+            body_markdown=(
+                f"From user_id: {current_user.id}\n"
+                f"Account email: {current_user.email}\n"
+                f"Reply-to email: {email}\n"
+                f"\n"
+                f"Company: {company_name}\n"
+                f"Current volume: {current_volume}\n"
+                f"Expected growth: {expected_growth}\n"
+                f"\n"
+                f"Submitted at: {datetime.utcnow().isoformat()}Z\n"
+            ),
         )
 
         flash("Thanks — we'll be in touch shortly about your custom plan.", "success")
@@ -2072,6 +2401,143 @@ def account():
         invoice_prefix_default=INVOICE_PREFIX_DEFAULT,
         invoice_prefix_input_max=INVOICE_PREFIX_INPUT_MAX,
     )
+
+
+# ---------- Account deletion (Hotfix-3 T4) ----------
+
+@app.route("/account/delete", methods=["GET", "POST"])
+@login_required
+def account_delete():
+    """
+    Hotfix-3 T4 (Inquisitor C2): self-serve account deletion.
+
+    Hard delete, not soft delete. GDPR Article 17 ("right to erasure")
+    requires deletion without undue delay; soft delete is a compliance
+    liability unless justified by legitimate interest (which we don't have
+    for the user-row + quote history). Stripe Dashboard remains the
+    canonical record of historic billing, which is the only data we have
+    a legitimate-interest argument to retain anyway.
+
+    Order of operations (intentional):
+      1. POST validates the confirmation email matches current_user.email.
+         Wrong email -> flash + re-render. Closes the misclick path.
+      2. Best-effort Stripe subscription cancel. Failure is logged + admin
+         alerted, but does NOT block the deletion — the user has the
+         legal right to leave regardless of whether Stripe's API hiccups.
+      3. logout_user() BEFORE DB delete so Flask-Login doesn't try to
+         touch a soon-to-be-deleted row mid-request.
+      4. Snapshot the email + sub_id BEFORE the User row goes away.
+      5. db.session.delete(user) cascades through profiles, quotes,
+         transactions, contact_submissions (all set in models.py).
+      6. shutil.rmtree the per-user PDF bucket. Errors here are non-fatal
+         (the bucket is regeneratable from DB; gone-from-DB means gone).
+      7. Send the account-closed confirmation email (best-effort).
+      8. Audit log `[ACCOUNT-DELETED]` carries the snapshot data so
+         post-hoc forensics has something to grep on.
+    """
+    user = db.session.get(User, current_user.id)
+    had_subscription = user.subscription_status in ("active", "past_due")
+
+    if request.method == "POST":
+        confirm = (request.form.get("confirm_email") or "").strip().lower()
+        if confirm != user.email.lower():
+            flash(
+                "The email you typed didn't match your account email. "
+                "Account NOT deleted.",
+                "error",
+            )
+            return render_template("account_delete.html")
+
+        # Snapshot for audit log + closed-email — these reads must happen
+        # before the delete clears the row.
+        deleted_email = user.email
+        deleted_uid = user.id
+        sub_id = user.subscription_id
+
+        # Best-effort Stripe sub cancel. Don't block delete on failure.
+        if sub_id and config.STRIPE_SECRET_KEY:
+            try:
+                stripe.Subscription.delete(sub_id)
+            except Exception as e:
+                app.logger.error(
+                    "[STRIPE-CANCEL-FAILED] user_id=%s sub_id=%s error=%r — "
+                    "proceeding with delete; manual reconcile needed",
+                    deleted_uid, sub_id, str(e),
+                )
+                _notify_admin(
+                    alert_tag="STRIPE-CANCEL-FAILED",
+                    subject_summary=f"Manual Stripe cancel needed for sub {sub_id}",
+                    body_markdown=(
+                        f"User_id (deleted): {deleted_uid}\n"
+                        f"Email (deleted):   {user.email}\n"
+                        f"Stripe sub_id:     {sub_id}\n"
+                        f"\n"
+                        f"The user has self-deleted their account, but the\n"
+                        f"Stripe subscription cancel API call failed:\n"
+                        f"  {e!r}\n"
+                        f"\n"
+                        f"Action: log in to Stripe Dashboard and cancel the\n"
+                        f"subscription manually. The user has no app account\n"
+                        f"anymore, so they cannot self-cancel via the\n"
+                        f"Billing Portal.\n"
+                    ),
+                )
+
+        # Log out the session BEFORE deleting the row — Flask-Login
+        # otherwise tries to load the (deleted) user on the next
+        # before_request hook and 500s.
+        logout_user()
+
+        # Cascade delete via SQLAlchemy relationships (models.py).
+        db.session.delete(user)
+        db.session.commit()
+
+        # PDF bucket cleanup — non-fatal on error; the bucket is purely a
+        # cache of DB-derivable content.
+        try:
+            pdf_dir = os.path.join(config.OUTPUT_DIR, str(deleted_uid))
+            if os.path.isdir(pdf_dir):
+                shutil.rmtree(pdf_dir, ignore_errors=True)
+        except Exception as e:
+            app.logger.warning(
+                "[ACCOUNT-DELETE-PDF-CLEANUP] user_id=%s error=%r — "
+                "DB row gone but PDF dir may persist; safe to ignore",
+                deleted_uid, str(e),
+            )
+
+        # Confirmation email — best-effort. The user can't reach support
+        # via the now-deleted account, but they can still see the closed
+        # confirmation in their inbox.
+        mailer.send_email(
+            to=deleted_email,
+            subject="Your Window Quoting account is closed",
+            html_body=render_template(
+                "email/account_closed.html",
+                closed_email=deleted_email,
+                support_email=config.SUPPORT_EMAIL,
+                had_subscription=had_subscription,
+            ),
+            text_body=render_template(
+                "email/account_closed.txt",
+                closed_email=deleted_email,
+                support_email=config.SUPPORT_EMAIL,
+                had_subscription=had_subscription,
+            ),
+        )
+
+        app.logger.info(
+            "[ACCOUNT-DELETED] user_id=%s email=%s sub_id=%s had_subscription=%s",
+            deleted_uid, deleted_email, sub_id, had_subscription,
+        )
+
+        flash(
+            "Your account is closed. We've sent a confirmation email to "
+            f"{deleted_email}.",
+            "success",
+        )
+        return redirect(url_for("register"))
+
+    return render_template("account_delete.html")
 
 
 # ---------- Legacy settings route — redirect to the new profile UI ----------

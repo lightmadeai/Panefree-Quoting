@@ -23,3 +23,22 @@
         <a href="{{ url_for('logout') }}" class="opacity-80 hover:opacity-100 hover:underline">Sign out</a>
     </div>
 </nav>
+{# Hotfix-3 T2: persistent unverified-email banner. Shows on every
+   authenticated page until the user clicks the verify link in their
+   email. POST-only form (CSRF token from Hotfix-2) hitting
+   /resend-verification — rate-limited 3/hour/IP server-side, so
+   accidental double-click is harmless. #}
+{% if current_user.is_authenticated and not current_user.email_verified %}
+<div class="bg-amber-50 border-b border-amber-200 text-amber-900 px-6 py-2 text-sm flex items-center justify-between gap-4">
+    <span>
+        <strong>Verify your email</strong> to start generating quotes. Check
+        your inbox for the link we sent to {{ current_user.email }}.
+    </span>
+    <form method="POST" action="{{ url_for('resend_verification') }}" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="text-amber-900 underline font-semibold hover:text-amber-700">
+            Resend verification email
+        </button>
+    </form>
+</div>
+{% endif %}

@@ -49,6 +49,13 @@ class User(UserMixin, db.Model):
     email_verified = db.Column(db.Boolean, nullable=False, default=False)
     email_verification_token = db.Column(db.Text, nullable=True, index=True)
     email_verification_token_expires = db.Column(db.DateTime, nullable=True)
+    # Hotfix-3 T3: password reset tokens. Same shape as the email
+    # verification token (32-char uuid hex, single-use, expires) but with
+    # a tighter 1-hour expiry — reset links are higher-value and
+    # short-lived limits the blast radius if a user forwards the email.
+    # Indexed for the lookup-by-token query in /reset-password/<token>.
+    password_reset_token = db.Column(db.Text, nullable=True, index=True)
+    password_reset_token_expires = db.Column(db.DateTime, nullable=True)
     business_name = db.Column(db.Text, nullable=True)
     phone_number = db.Column(db.Text, nullable=True)
     # NULL means "use sovereign default"; non-NULL is the user's customized
@@ -80,8 +87,25 @@ class User(UserMixin, db.Model):
     quote_prefix = db.Column(db.Text, nullable=False, default="Q-")
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    transactions = db.relationship("Transaction", backref="user", lazy=True)
-    profiles = db.relationship("PricingProfile", backref="user", lazy=True, cascade="all, delete-orphan")
+    # Hotfix-3 T4 (Inquisitor C2): all child rows cascade-delete with the
+    # user. Hard delete is the GDPR-compliant default; Stripe Dashboard
+    # remains the canonical source of historic billing records.
+    transactions = db.relationship(
+        "Transaction", backref="user", lazy=True,
+        cascade="all, delete-orphan",
+    )
+    profiles = db.relationship(
+        "PricingProfile", backref="user", lazy=True,
+        cascade="all, delete-orphan",
+    )
+    quotes = db.relationship(
+        "Quote", backref="user", lazy=True,
+        cascade="all, delete-orphan",
+    )
+    contact_submissions = db.relationship(
+        "ContactSubmission", backref="user", lazy=True,
+        cascade="all, delete-orphan",
+    )
 
     def set_password(self, raw):
         self.password_hash = generate_password_hash(raw)

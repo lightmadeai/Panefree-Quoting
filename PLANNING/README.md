@@ -3,7 +3,7 @@
 **Steward:** Inquisitor (protocol edits require Inquisitor approval; Jade proposes changes via `drafts/protocol-change-N.md`)
 **Sponsor:** Thorn (Chris)
 **Adopted:** 2026-05-01
-**Last updated:** 2026-05-03
+**Last updated:** 2026-05-12
 
 ---
 
@@ -87,6 +87,8 @@ created: YYYY-MM-DD
 - `npm run build` clean (or project equivalent)
 - Commit on `sprint-N` branch
 - `notes/sprint-N-notes.md` updated
+- **Completion report** posted (see §14)
+
 ```
 
 ## 4. Role Boundaries
@@ -117,19 +119,22 @@ All files in `research/`, `content/`, and `drafts/` are prefixed with sprint num
 
 This eliminates collision risk across concurrent or sequential sprints.
 
-### 5.4 Pull-based publishing
+### 5.5 Audit canonicality
+Inquisitor post-audit reports MUST be written to the canonical path `PLANNING/audits/sprint-N-audit.md` (or `PLANNING/audits/hotfix-N-audit.md`). Delivery via agent inbox is for notification only — the file on disk is the authoritative record. If an audit result lands only in an inbox and not in `audits/`, it has not been formally completed. Jade is responsible for ensuring the canonical file exists after receiving an inbox notification.
+
+### 5.6 Pull-based publishing
 Solis and Luna publish to `PLANNING/` lanes ONLY when a sprint draft references their lane. Proactive research/content stays in their agent workspace (`memory/cells/`) until Jade links it into a sprint.
 
-### 5.5 Serial execution per project
+### 5.7 Serial execution per project
 One `current-sprint.md` per project at a time. Multiple projects CAN run in parallel (different `PLANNING/` trees). Within one project, serial only.
 
-### 5.6 Sprint numbering
+### 5.8 Sprint numbering
 Jade owns the sprint counter. `next_sprint` number is tracked in this file (see below). Jade increments on promotion from draft to current.
 
-### 5.7 Audit SLA
+### 5.9 Audit SLA
 Inquisitor pre-audits within **4 hours** during active hours (08:00-23:00 Pacific). Outside active hours, audits queue for the next active window. No SLA clock for side hustle bandwidth — this is a target, not a contract.
 
-### 5.8 RAM coordination
+### 5.10 RAM coordination
 Jade heartbeat pauses during active Claude execution. No concurrent Inquisitor heavy ops (audits, large reads) while Claude Code is mid-sprint. Daily Purge at 2AM is safe — no sprints should be active during quiet hours.
 
 ## 6. Status Definitions
@@ -252,3 +257,28 @@ Stabilize phase ends when `backlog.md` has zero P0/P1 items. At that point, eith
      Per Inquisitor approval of Stabilization Phase amendment (2026-05-06). -->
 
 *(Jade increments this number when promoting a draft to `current-sprint.md` during Build Phase. Counter pauses during Stabilize Phase.)*
+
+---
+
+## 14. Completion Reports
+
+Every sprint or hotfix must produce a **completion report** upon finishing. This report is written by the executing agent (Claude Code or designated builder) and delivered to Chris via the project channel.
+
+### Required fields:
+1. **What was done** — each task, its outcome (pass/fail/partial), and any deviations from the manifest
+2. **What was not done** — any deferred items, with reason
+3. **Non-blocking remarks** — issues noted but not blocking (e.g., missing `.env.example` entries, test gaps)
+4. **Regression results** — stress probe, unit tests, lint, any other verification
+5. **Next steps** — what the next sprint/hotfix should address first
+
+### Delivery:
+- Saved to `notes/sprint-N-notes.md` (or `notes/hotfix-N-notes.md`)
+- Inquisitor posts a summary to `#turing-temple` during post-audit
+- Chris is notified of the result in `#general-communications`
+
+### Purpose:
+Completion reports ensure Chris is always informed of outcomes, not just "it passed." They provide traceability, surface deferred items, and keep the pipeline visible.
+
+---
+
+<!-- Protocol v1.3 — 2026-05-12 — Adds §14 Completion Reports. -->

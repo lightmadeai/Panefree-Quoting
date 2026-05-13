@@ -1,0 +1,33 @@
+{#
+  Admin alert template. Variables: alert_tag (e.g. "CREDIT-REFUND-FAILED"),
+  subject_summary (one-line), body_markdown (multi-line plain text with the
+  details — preformatted with <pre> so it stays readable in the email).
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ alert_tag }} — Window Quoting</title>
+</head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#1e293b;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="padding:24px 16px;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
+                    <tr>
+                        <td style="padding:20px 24px;background:#fef3c7;border-bottom:1px solid #fde68a;">
+                            <div style="font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;color:#92400e;">{{ alert_tag }}</div>
+                            <div style="margin-top:4px;font-size:16px;font-weight:600;color:#78350f;">{{ subject_summary }}</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding:20px 24px;">
+                            <pre style="margin:0;font-family:Consolas,'Courier New',monospace;font-size:13px;line-height:1.5;color:#1e293b;white-space:pre-wrap;word-break:break-word;">{{ body_markdown }}</pre>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

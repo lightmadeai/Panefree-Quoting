@@ -157,6 +157,11 @@
             <div class="flex gap-3 pt-3 border-t border-slate-100">
                 <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-all">Save Changes</button>
                 <a href="{{ url_for('index') }}" class="text-slate-600 py-2 px-4 hover:underline">Back</a>
+                {# Hotfix-3 T4: Danger Zone link. The actual delete confirmation
+                   lives at /account/delete with a type-your-email check; this
+                   link just routes there. Outside the main form so it can't
+                   accidentally piggyback on the Save submit. #}
+                <a href="{{ url_for('account_delete') }}" class="ml-auto text-red-600 py-2 px-4 hover:underline text-sm">Delete account</a>
             </div>
         </form>
     </main>

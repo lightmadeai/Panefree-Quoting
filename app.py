@@ -3,12 +3,132 @@ import re
 import sys
 import json
 import shutil
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
+
+
+# ---------------------------------------------------------------------------
+# Hotfix-4 T1: Sentry SDK initialization.
+#
+# Init MUST happen before `Flask(__name__)` so the Flask integration's
+# patches are in place when routes register. SENTRY_DSN unset = full
+# no-op (the SDK detects missing DSN and silently does nothing) — keeps
+# dev/test runs from polluting the dashboard.
+#
+# Two custom `before_send` behaviors (Inquisitor C1 + general PII hygiene):
+#   1. PII scrub: replace any request-context field named password /
+#      csrf_token / customer_email / customer_phone / customer_address
+#      with "[scrubbed]" before transmit. Defense in depth — Sentry's
+#      default scrubbers already catch `password`, but the customer_*
+#      fields are app-specific and need explicit handling.
+#   2. 500-events/hour rate cap: in-process token bucket per worker.
+#      If a Day-1 bug triggers a loop, the dashboard stays useful
+#      instead of being flooded out of the free-tier quota.
+#
+# `release` is set to the git SHA exposed via /health (T2). Falls back
+# to "dev" when the VERSION file doesn't exist (i.e. local runs).
+# ---------------------------------------------------------------------------
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.flask import FlaskIntegration
+except ImportError:  # pragma: no cover — sentry-sdk is in requirements.txt
+    sentry_sdk = None
+    FlaskIntegration = None
+
+_SENTRY_PII_FIELDS = frozenset({
+    "password", "csrf_token",
+    "customer_email", "customer_phone", "customer_address",
+})
+
+# In-process rate limiter for Sentry events. Token bucket: refill 500
+# events/hour = 1 event every 7.2s. Per-worker (multi-worker prod will
+# get a slightly higher effective cap, which is acceptable — the goal
+# is "dashboard usable under error storm," not exact quota math).
+_SENTRY_RATE_CAP_PER_HOUR = 500
+_SENTRY_TOKEN_REFILL_INTERVAL_S = 3600.0 / _SENTRY_RATE_CAP_PER_HOUR
+_sentry_rate_state = {
+    "tokens": float(_SENTRY_RATE_CAP_PER_HOUR),  # start full
+    "last_refill": time.monotonic(),
+}
+_sentry_rate_lock = threading.Lock()
+_sentry_drops_since_log = 0
+
+
+def _sentry_before_send(event, hint):
+    """
+    Runs on every event Sentry is about to ship. Two passes:
+
+      1. Scrub PII from request context. Sentry's default scrubbers catch
+         password / authorization / cookies; we extend to the app-specific
+         customer_* fields.
+      2. Token-bucket rate limit per worker. If we're over 500/hr, drop
+         the event and (periodically) log how many we've dropped.
+    """
+    # ---- PII scrub ----
+    req = event.get("request") or {}
+    for bucket in ("data", "query_string", "headers", "cookies"):
+        val = req.get(bucket)
+        if isinstance(val, dict):
+            for k in list(val.keys()):
+                if k.lower() in _SENTRY_PII_FIELDS:
+                    val[k] = "[scrubbed]"
+
+    # ---- Rate limit ----
+    global _sentry_drops_since_log
+    with _sentry_rate_lock:
+        now = time.monotonic()
+        elapsed = now - _sentry_rate_state["last_refill"]
+        refill = elapsed / _SENTRY_TOKEN_REFILL_INTERVAL_S
+        if refill > 0:
+            _sentry_rate_state["tokens"] = min(
+                float(_SENTRY_RATE_CAP_PER_HOUR),
+                _sentry_rate_state["tokens"] + refill,
+            )
+            _sentry_rate_state["last_refill"] = now
+        if _sentry_rate_state["tokens"] < 1.0:
+            _sentry_drops_since_log += 1
+            # Periodic local log so ops sees the drop volume — don't
+            # send this to Sentry (that would defeat the rate limit).
+            if _sentry_drops_since_log == 1 or _sentry_drops_since_log % 100 == 0:
+                # logger is set up later in this module; use stderr-print
+                # as a fallback since this hook runs throughout the lifetime.
+                sys.stderr.write(
+                    f"[SENTRY-RATE-LIMITED] dropped {_sentry_drops_since_log} "
+                    f"events since last log (cap={_SENTRY_RATE_CAP_PER_HOUR}/hr)\n"
+                )
+            return None
+        _sentry_rate_state["tokens"] -= 1.0
+        _sentry_drops_since_log = 0
+
+    return event
+
+
+def _read_version_sha():
+    """Read git SHA from VERSION file written by deploy. Falls back to
+    'dev' for local runs. Shared by Sentry release tag + /health (T2)."""
+    try:
+        with open(os.path.join(project_root, "VERSION"), "r") as f:
+            return f.read().strip() or "dev"
+    except (OSError, IOError):
+        return "dev"
+
+
+_SENTRY_DSN = os.environ.get("SENTRY_DSN")
+if _SENTRY_DSN and sentry_sdk is not None:
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        integrations=[FlaskIntegration()] if FlaskIntegration else [],
+        traces_sample_rate=0.1,  # 10% — free-tier budget-friendly
+        release=_read_version_sha(),
+        send_default_pii=False,  # we send what we want via before_send
+        before_send=_sentry_before_send,
+    )
 
 
 def _user_pdf_dir(user_id):
@@ -844,7 +964,7 @@ def _send_verification_email(user, token):
     )
     return mailer.send_email(
         to=user.email,
-        subject="Verify your Window Quoting email",
+        subject="Verify your Panefree Quotes email",
         html_body=html_body,
         text_body=text_body,
     )
@@ -905,6 +1025,14 @@ def register():
         user.set_password(password)
         db.session.add(user)
         db.session.commit()  # commit before _issue_verification_token so user.id exists
+
+        # Hotfix-4 T3: happy-path log for the signup funnel. Lets ops
+        # answer "how many signups happened today" from logs without
+        # touching the DB, and pairs with [EMAIL-VERIFICATION] /
+        # [LOGIN-SUCCESS] for a complete user-lifecycle trail.
+        app.logger.info(
+            "[REGISTER-SUCCESS] user_id=%s email=%s", user.id, user.email,
+        )
 
         # BUG-003 (Sprint 4): new users no longer get auto-seeded starter
         # profiles. The first hit to "/" redirects them into /profiles/new
@@ -992,6 +1120,13 @@ def login():
         # See /register for the full rationale.
         from flask import session as _session
         _session.permanent = True
+        # Hotfix-4 T3: happy-path log for forensic depth. Pairs with the
+        # implicit auth-failure path (Flask-Login redirect to /login) so
+        # ops can see a "user X logged in at T" trail without needing
+        # Sentry depth on every successful auth.
+        app.logger.info(
+            "[LOGIN-SUCCESS] user_id=%s email=%s", user.id, user.email,
+        )
         return redirect(url_for("index"))
 
     return render_template("login.html")
@@ -1058,7 +1193,7 @@ def forgot_password():
             )
             mailer.send_email(
                 to=user.email,
-                subject="Reset your Window Quoting password",
+                subject="Reset your Panefree Quotes password",
                 html_body=render_template(
                     "email/reset.html",
                     reset_url=reset_url,
@@ -1857,6 +1992,68 @@ def top_up():
     )
 
 
+_APP_BOOT_TIME = time.monotonic()
+_APP_VERSION = _read_version_sha()
+
+
+@app.route("/health")
+@csrf.exempt
+@limiter.exempt
+def health():
+    """
+    Hotfix-4 T2: lightweight health endpoint for external uptime monitors
+    (UptimeRobot, etc.) and orchestrator readiness probes.
+
+    Returns JSON:
+      {"status": "ok",        "db": "ok",   "version": "<sha>", "uptime_s": N}   # 200
+      {"status": "degraded",  "db": "fail", "version": "<sha>", "uptime_s": N}   # 503
+
+    Intentionally does NOT touch Stripe / Postmark / Sentry — those are
+    external dependencies whose failures aren't application failures. The
+    page can still render and most user flows still work even if Stripe
+    is having an incident. UptimeRobot watches the app's own health;
+    Sentry's own dashboard / status page is the source for SaaS health.
+
+    No auth, no CSRF, no rate limit — the orchestrator and UptimeRobot
+    both need to hit this on every probe cycle without state. Talisman's
+    default response headers still apply.
+
+    DB check is a `SELECT 1`. Sub-50ms p95 in normal conditions.
+    """
+    db_ok = True
+    try:
+        db.session.execute(text("SELECT 1")).scalar()
+    except Exception:
+        db_ok = False
+
+    uptime_s = int(time.monotonic() - _APP_BOOT_TIME)
+    payload = {
+        "status": "ok" if db_ok else "degraded",
+        "db": "ok" if db_ok else "fail",
+        "version": _APP_VERSION,
+        "uptime_s": uptime_s,
+    }
+    status_code = 200 if db_ok else 503
+    return jsonify(payload), status_code
+
+
+@app.route("/dev/sentry-test")
+def dev_sentry_test():
+    """
+    Hotfix-4 T1: deliberate exception trigger to verify the Sentry
+    integration is live. Hard-gated identically to /dev/grant-credits:
+    404s unless DEV_MODE is set AND Stripe is NOT configured. Production
+    with real Stripe keys cannot expose this route even if DEV_MODE leaks.
+
+    Returns nothing useful — the side effect is the Sentry event. Verify
+    by hitting this URL while DEV_MODE=1 and SENTRY_DSN points at a real
+    project; the error should appear in the dashboard within ~60s.
+    """
+    if not config.DEV_MODE or config.STRIPE_SECRET_KEY:
+        abort(404)
+    raise RuntimeError("sentry test — deliberate exception (Hotfix-4 T1)")
+
+
 @app.route("/dev/grant-credits", methods=["POST"])
 @login_required
 def dev_grant_credits():
@@ -2333,6 +2530,15 @@ def stripe_webhook():
     event_type = event["type"]
     event_obj = event["data"]["object"]
 
+    # Hotfix-4 T3: log every signature-verified webhook event we receive.
+    # Pairs with the [STRIPE-CANCEL-FAILED] / Transaction-dedup paths to
+    # give ops a full audit trail of "what Stripe told us." event_id
+    # included so we can match against Stripe Dashboard's event log.
+    app.logger.info(
+        "[STRIPE-WEBHOOK] type=%s event_id=%s",
+        event_type, event.get("id"),
+    )
+
     if event_type == "checkout.session.completed":
         if event_obj.get("mode") == "subscription":
             return _handle_subscription_checkout(event_obj)
@@ -2510,7 +2716,7 @@ def account_delete():
         # confirmation in their inbox.
         mailer.send_email(
             to=deleted_email,
-            subject="Your Window Quoting account is closed",
+            subject="Your Panefree Quotes account is closed",
             html_body=render_template(
                 "email/account_closed.html",
                 closed_email=deleted_email,

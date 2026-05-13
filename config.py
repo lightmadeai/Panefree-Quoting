@@ -46,7 +46,7 @@ STARTING_CREDITS = 10
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
-APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:5001")
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://panefreequoting.com")
 
 # Dev-only: when DEV_MODE=1 AND Stripe is NOT configured, the top-up page
 # exposes a simulator that grants credits without Stripe. Both conditions
@@ -91,7 +91,9 @@ SOFT_CAP_THRESHOLD = int(os.environ.get("SOFT_CAP_THRESHOLD", "1000"))
 
 # Contact address surfaced in the soft-cap CTA. Configurable so different
 # environments (test/staging/prod) can route the conversation differently.
-SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@windowquoting.com")
+# Default matches the production domain (Hotfix-4 T0 — branding pass after
+# panefreequoting.com was locked in 2026-05-12).
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@panefreequoting.com")
 
 # ---------------------------------------------------------------------------
 # Hotfix-3 — Email backend (Postmark)
@@ -108,15 +110,19 @@ SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@windowquoting.com")
 # verified sender domain. Postmark rejects sends from unverified addresses.
 #
 # EMAIL_FROM_NAME — friendly display name. Postmark composes the final
-# From header as "Window Quoting <support@windowquoting.com>" when both
+# From header as "Panefree Quotes <support@panefreequoting.com>" when both
 # are set.
 #
 # ADMIN_EMAIL — destination for ops alerts (refund failures, contact
 # submissions, backup failures from Hotfix-5). Defaults to SUPPORT_EMAIL
 # so single-operator setups don't need to set both.
 POSTMARK_SERVER_TOKEN = os.environ.get("POSTMARK_SERVER_TOKEN")
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "support@windowquoting.com")
-EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Window Quoting")
+# Hotfix-4 T0: defaults aligned with production domain panefreequoting.com
+# and the user-visible "Panefree Quotes" brand name (matches templates'
+# nav + page titles). Internal codename "window-quoting" stays unchanged
+# in folder paths, log tags, and the Stripe metadata fields.
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "support@panefreequoting.com")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Panefree Quotes")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", SUPPORT_EMAIL)
 
 # MAIL_DISABLED — test-only kill switch, same pattern as WTF_CSRF_DISABLED

@@ -19,7 +19,7 @@ All configuration lives in `config.py` and reads from `os.environ` at boot. Copy
 | `WTF_CSRF_DISABLED` | Test only | `1` disables CSRF token enforcement so the existing `testing/stress_probe.py` + locust harness POSTs work without per-form token fetches. Loud `WARNING` logged at boot when set. **NEVER set in production.** |
 | `RATELIMIT_DISABLED` | Test only | `1` disables Flask-Limiter so locust can hammer `/login`/`/register` without tripping the IP gate. **NEVER set in production.** |
 | `SOFT_CAP_THRESHOLD` | Optional | Annual subscribers' soft-cap notice fires at this number of quotes per billing period. Default 1000. The 80% warning is computed from this value (`threshold * 8 // 10`). |
-| `SUPPORT_EMAIL` | Optional | Surface address for the contact CTA + footer. Default `support@windowquoting.com`. |
+| `SUPPORT_EMAIL` | Optional | Surface address for the contact CTA + footer. Default `support@panefreequoting.com` (Hotfix-4 T0 — was `support@windowquoting.com` pre-domain-decision). |
 | `RATE_LIMIT_QUOTES_PER_HOUR` | Optional | Free-tier quote-generation rate limit per rolling 60-min window. Default 10. Separate from the Hotfix-2 Flask-Limiter gates on auth routes. |
 
 ---
@@ -255,7 +255,137 @@ Without `ProxyFix`, every request looks like it came from the proxy's single IP 
 
 ---
 
-## 9. Open items for Sprint 5
+## 9. Log catalog (Hotfix-4 T3)
+
+Every `app.logger.warning` and `app.logger.error` line in `app.py` carries a structured `[TAG]` prefix so log searches are deterministic. This catalog is the source of truth for "what does this log line mean and how do I respond." Sentry alert rules (Operations runbook §10) key off these tags.
+
+| Tag | Level | Meaning | Suggested response |
+|---|---|---|---|
+| `[CSRF]` | WARNING | `WTF_CSRF_DISABLED=1` set at boot — test escape hatch active | If seen in production: deploy is misconfigured; unset the env var and restart |
+| `[MAIL]` (disabled) | WARNING | `MAIL_DISABLED=1` set at boot — no emails will send | If seen in production: deploy is misconfigured; unset the env var and restart |
+| `[MAIL]` (token missing) | ERROR | `POSTMARK_SERVER_TOKEN` unset in production | Set `POSTMARK_SERVER_TOKEN` and restart — new users can't satisfy email_verified gate |
+| `[REGISTER-SUCCESS]` | INFO | New account created | Forensic / funnel metric — no action |
+| `[LOGIN-SUCCESS]` | INFO | User logged in | Forensic — no action |
+| `[EMAIL-VERIFICATION]` | INFO | Verification token issued or re-issued | Forensic — verify URL captured as fallback if email failed |
+| `[EMAIL-SENT]` | INFO | Postmark accepted a transactional message | Forensic — Postmark dashboard is canonical |
+| `[EMAIL-SEND-FAILED]` | ERROR | Postmark rejected or network call failed | Check Postmark dashboard, verify `POSTMARK_SERVER_TOKEN` + `EMAIL_FROM` sender signature |
+| `[MAIL-DISABLED]` | INFO | Would-have-sent line from mailer in test mode | Forensic; should never appear in prod |
+| `[PASSWORD-RESET]` | INFO | Reset request received (issued, completed, or no-op for unknown email) | Forensic; high volume of unknown-email requests = enumeration probe → investigate IP |
+| `[ACCOUNT-DELETED]` | INFO | User self-deleted their account | Forensic audit trail; one record per deletion |
+| `[ACCOUNT-DELETE-PDF-CLEANUP]` | WARNING | PDF bucket cleanup failed after account delete | Manually `rm -rf output/<user_id>/` on the host |
+| `[CONTACT-SUBMISSION]` | INFO | Custom-plan inquiry from soft-cap CTA | Also emailed to `ADMIN_EMAIL` (T5/H3); reply same-day |
+| `[CREDIT-REFUND-FAILED]` | ERROR | `/generate` failed AND credit refund UPDATE also failed | Also emailed to `ADMIN_EMAIL`; manually `+1 credit_balance` on the user_id |
+| `[STRIPE-WEBHOOK]` | INFO | Signature-verified webhook event received | Forensic — pair with Stripe Dashboard event log via event_id |
+| `[STRIPE-CANCEL-FAILED]` | ERROR | Account delete proceeded but Stripe sub cancel API failed | Also emailed to `ADMIN_EMAIL`; manually cancel the subscription in Stripe Dashboard |
+| `[SENTRY-RATE-LIMITED]` | stderr | More than 500 events/hour to Sentry — drops happening | Investigate the underlying error storm; consider Sentry plan upgrade |
+
+**Where they go:** all `app.logger.*` calls emit to gunicorn's stdout/stderr in production. The hosting provider (Render / etc.) captures and rotates these — see Operations runbook (§10) for the log retention configuration.
+
+**What's NOT in the catalog:** routine 200 responses, debug-level lines, framework logs (werkzeug request lines, SQLAlchemy queries). Sentry handles uncaught exceptions; log catalog handles deliberate observability.
+
+---
+
+## 10. Operations runbook (Hotfix-4 T4)
+
+This section is the operator-facing manual for running this software in production. It covers (a) external monitoring setup, (b) reactive playbooks for the most likely incidents, and (c) the proactive maintenance schedule.
+
+### 10.1 External monitoring setup
+
+#### UptimeRobot
+
+1. Sign in to UptimeRobot, click **+ New Monitor**.
+2. Monitor type: **HTTP(s)**.
+3. Friendly name: `Panefree Quotes — /health`.
+4. URL: `https://panefreequoting.com/health`.
+5. Monitoring interval: **5 minutes** (free tier minimum; sufficient for v1).
+6. Alert contacts: your email (and SMS if you've enabled it). Default channels work.
+7. Save.
+
+UptimeRobot does a GET on `/health` every 5 minutes. The endpoint returns 200 + `{"db":"ok"}` when healthy; 503 + `{"db":"fail"}` when the database is unreachable. Any non-200 triggers an alert email within ~2 minutes.
+
+Add a second monitor for the backup heartbeat once H5 ships — see Hotfix-5 §T4.
+
+#### Sentry alert rules
+
+In Sentry's project settings → Alerts → **+ Create Alert Rule**, set up the following three rules:
+
+| Rule | Condition | Action |
+|---|---|---|
+| Error storm | An event is seen more than **5 times in 1 hour** | Email me |
+| Payment failure | An event with tag `[CREDIT-REFUND-FAILED]` OR `[STRIPE-CANCEL-FAILED]` more than **1 time in 1 hour** | Email me (same-day reconcile) |
+| Latency regression | Transaction p95 duration is more than **2 seconds for 15 minutes** | Email me |
+
+Mobile push notifications: install the **Sentry mobile app** (free, iOS + Android) and connect to your account. SMS / Twilio not used in v1 per Inquisitor C2.
+
+#### Postmark monitoring (manual)
+
+Postmark's own dashboard is the source of truth for email delivery. Check weekly:
+- **Activity → Sent** for failed sends
+- **Activity → Bounces** for any unusual rates (>2% sustained = problem)
+- **Activity → Spam complaints** — should be near-zero for transactional mail
+
+No automated alerts wired in v1 — Postmark has them in their dashboard if you want to set them.
+
+### 10.2 Alert → response playbook
+
+For each common alert, the "investigate → mitigate → fix" sequence:
+
+#### `[CREDIT-REFUND-FAILED]` (also emails ADMIN_EMAIL)
+1. **Investigate.** Open the email or grep logs for `[CREDIT-REFUND-FAILED]` — pull `user_id`, `original_error`, `refund_error`.
+2. **Mitigate.** Manually add 1 credit:
+   ```bash
+   sqlite3 sovereign.db "UPDATE users SET credit_balance = credit_balance + 1 WHERE id = <USER_ID>"
+   ```
+   Email the user: "Heads up — we hit a snag generating your last quote. Your credit has been restored."
+3. **Fix.** If `refund_error` shows a pattern (DB lock, disk full, sqlite busy), file a sprint to investigate root cause. One-offs from transient sqlite contention are acceptable; sustained patterns are not.
+
+#### `[STRIPE-CANCEL-FAILED]` (also emails ADMIN_EMAIL)
+1. **Investigate.** The user account is already deleted; the Stripe sub may still be billing them. Email shows `sub_id`.
+2. **Mitigate.** Log in to Stripe Dashboard → Subscriptions → search by `sub_id` → Cancel subscription. Issue any pro-rated refund if appropriate.
+3. **Fix.** Usually a one-off Stripe API hiccup. If pattern, check Stripe service status and API key validity.
+
+#### `[EMAIL-SEND-FAILED]` (no auto-email — log only)
+1. **Investigate.** Check Postmark dashboard for the recipient's send attempts. Look for bounces, spam-complaint flags, or 4xx responses.
+2. **Mitigate.** If a specific recipient is bouncing, the user's email is wrong or full — no app-side fix possible. If many recipients are failing, check `POSTMARK_SERVER_TOKEN` validity and `EMAIL_FROM` sender signature.
+3. **Fix.** Token rotation or signature re-verification in Postmark.
+
+#### `/health` returning 503 (UptimeRobot alert)
+1. **Investigate.** SSH or open the hosting console. `curl https://panefreequoting.com/health` and read the response. If `db=fail`, the SQLite file is unreachable.
+2. **Mitigate.** Check disk space (`df -h`), check the gunicorn process is up, check that `sovereign.db` exists at the expected path. If sqlite was locked by a backup, the lock auto-releases.
+3. **Fix.** If the DB is gone, restore from latest H5 backup (see Hotfix-5 §T3 restore drill).
+
+#### Sentry error storm
+1. **Investigate.** Open the top unresolved event in Sentry. The stack trace + request context tell you what's wrong.
+2. **Mitigate.** If the bug is user-facing (e.g. /generate is 500-ing), consider rolling back to the last known-good deploy. See §7 Rollback plan.
+3. **Fix.** File a hotfix sprint with the Sentry event ID in the manifest.
+
+### 10.3 Maintenance schedule (proactive)
+
+Calendar-driven, not incident-driven. Logged in `MAINTENANCE_LOG.md` (repo root) on each pass.
+
+| Cadence | Task | Time |
+|---|---|---|
+| **Weekly** (Monday) | Skim Sentry unresolved errors. Skim gunicorn 5xx in access logs. Check Stripe Dashboard for failed payments / disputes. Glance at signup + quote volume (DB query or Stripe). | 15-30 min |
+| **Monthly** (1st of month) | Run `pip-audit --requirement requirements.txt --strict`. Bump any flagged deps in `requirements.txt`. Re-run `testing/stress_probe.py` + locust. Redeploy. Review Sentry quota usage (free tier = 5k errors/month). | 1-2 hours |
+| **Quarterly** (Jan / Apr / Jul / Oct 1st) | Full re-run of `stress_probe.py` + locust + `pip-audit`. Execute one full backup restore drill (H5 §10.3). Read Stripe Dashboard tax / payout summary. Re-read this DEPLOYMENT.md for stale instructions. | 2-4 hours |
+| **Annually** (each January) | Major-version upgrades (Flask N → N+1, Python 3.x → 3.x+1). TLS cert renewal verification (auto-renew should handle, but verify). Re-run the full pre-launch security review. Archive prior year's backups beyond retention to cold storage if desired. | 1 day |
+| **Reactive** | Customer reports a bug → triage same day → fix within the week. Security / billing reports → same-day fix, no exceptions. | Variable |
+
+Append an entry to `MAINTENANCE_LOG.md` for every scheduled pass with date + what was done + anomalies noted. Skipped entries are visible gaps.
+
+### 10.4 On-call rotation (solo ops for v1)
+
+One-person ops for v1 — Thorn IS the rotation. Honestly-named expectations:
+- **Phone on bedside table at night** for critical alerts (Sentry "payment failure" + UptimeRobot 503).
+- **Realistic SLA**: acknowledged within 4 business hours, fixed within 2 business days for non-billing/non-security issues.
+- **Security or billing report**: same-day fix, regardless of hours.
+- **Set customer expectations on the contact form accordingly** — a small "we respond within 1 business day" note pre-empts angry follow-ups.
+
+When the operator role grows beyond one person (e.g. you hire someone), this section gets a real rotation schedule + escalation contact list. For now it's just an honest statement of where the buck stops.
+
+---
+
+## 11. Open items for Sprint 5
 
 These are intentionally not in Sprint 4's scope:
 

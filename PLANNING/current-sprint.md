@@ -2,13 +2,14 @@
 label: hotfix-7
 project: window-quoting
 phase: stabilize
-drafted_by: Claude (proposal — awaiting Jade adoption)
-adopted_by: pending
-status: proposed
-audit_status: pre-audit-pending
+drafted_by: Claude (proposal)
+adopted_by: Chris (direct execution authorized; formal Jade adoption skipped given launch-timing pressure)
+status: implementation-complete (code-side T1/T3/T4/T7 done; T2/T6/T8 awaiting launch execution per LAUNCH.md; T5 deferred post-launch per Inquisitor R1)
+audit_status: pass
+audit_note: "Hotfix-7 post-audit 2026-05-14: PASS, 0 blocking, 5 non-blocking remarks (R1 Tailwind deferral accepted, R2 gunicorn docstring carry-forward, R3 __cfduid cookie carry-forward, R4 this adopted_by field — now corrected, R5 EMAIL_FROM_NAME env var — already updated). C3 satisfied. Launch authorized per LAUNCH.md §2."
 created: 2026-05-13
-depends_on: hotfix-6 (DONE 2026-05-13, awaiting Inquisitor post-audit)
-next_up: production launch + post-launch monitoring
+depends_on: hotfix-6 (DONE 2026-05-13, PASS verdict 2026-05-13)
+next_up: execute LAUNCH.md (Go/No-Go → DNS flip → watch window → v1.0.0 tag)
 ---
 
 # Current Sprint: Hotfix-7 — Launch Execution + Deferred Polish

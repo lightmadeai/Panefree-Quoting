@@ -21,7 +21,7 @@ Side effects:
 Configuration (env vars, all read at boot via config.py):
   POSTMARK_SERVER_TOKEN — required outside DEV_MODE; missing in prod = boot error
   EMAIL_FROM            — verified sender address in Postmark
-  EMAIL_FROM_NAME       — friendly display name ("Panefree Quotes")
+  EMAIL_FROM_NAME       — friendly display name ("Panefree Quoting")
   MAIL_DISABLED         — test-only kill switch; no real HTTP when set
 
 Why the kill switch mirrors WTF_CSRF_DISABLED / RATELIMIT_DISABLED:
@@ -85,7 +85,7 @@ def send_email(
 
     token = server_token or os.environ.get("POSTMARK_SERVER_TOKEN")
     sender = from_addr or os.environ.get("EMAIL_FROM")
-    sender_name = from_name or os.environ.get("EMAIL_FROM_NAME", "Panefree Quotes")
+    sender_name = from_name or os.environ.get("EMAIL_FROM_NAME", "Panefree Quoting")
 
     if not token:
         logger.error(

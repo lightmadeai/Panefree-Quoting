@@ -110,7 +110,7 @@ SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@panefreequoting.com")
 # verified sender domain. Postmark rejects sends from unverified addresses.
 #
 # EMAIL_FROM_NAME — friendly display name. Postmark composes the final
-# From header as "Panefree Quotes <support@panefreequoting.com>" when both
+# From header as "Panefree Quoting <support@panefreequoting.com>" when both
 # are set.
 #
 # ADMIN_EMAIL — destination for ops alerts (refund failures, contact
@@ -118,11 +118,11 @@ SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@panefreequoting.com")
 # so single-operator setups don't need to set both.
 POSTMARK_SERVER_TOKEN = os.environ.get("POSTMARK_SERVER_TOKEN")
 # Hotfix-4 T0: defaults aligned with production domain panefreequoting.com
-# and the user-visible "Panefree Quotes" brand name (matches templates'
+# and the user-visible "Panefree Quoting" brand name (matches templates'
 # nav + page titles). Internal codename "window-quoting" stays unchanged
 # in folder paths, log tags, and the Stripe metadata fields.
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "support@panefreequoting.com")
-EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Panefree Quotes")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Panefree Quoting")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", SUPPORT_EMAIL)
 
 # MAIL_DISABLED — test-only kill switch, same pattern as WTF_CSRF_DISABLED

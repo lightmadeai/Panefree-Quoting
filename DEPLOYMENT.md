@@ -301,7 +301,7 @@ This section is the operator-facing manual for running this software in producti
 
 1. Sign in to UptimeRobot, click **+ New Monitor**.
 2. Monitor type: **HTTP(s)**.
-3. Friendly name: `Panefree Quotes — /health`.
+3. Friendly name: `Panefree Quoting — /health`.
 4. URL: `https://panefreequoting.com/health`.
 5. Monitoring interval: **5 minutes** (free tier minimum; sufficient for v1).
 6. Alert contacts: your email (and SMS if you've enabled it). Default channels work.
@@ -494,7 +494,7 @@ Two layers, wire-compatible with Hotfix-4's observability stack:
 
 **Setup steps for the UptimeRobot side:**
 1. UptimeRobot → + New Monitor → type: **Heartbeat**
-2. Friendly name: `Panefree Quotes — daily backup`
+2. Friendly name: `Panefree Quoting — daily backup`
 3. Interval: 36 hours (so one missed day doesn't page; two does)
 4. Copy the generated heartbeat URL into `BACKUP_HEARTBEAT_URL` in your hosting secrets
 5. Set alert contacts the same as the /health monitor (§10.1)

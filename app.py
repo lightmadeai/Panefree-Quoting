@@ -972,7 +972,7 @@ def _send_verification_email(user, token):
     )
     return mailer.send_email(
         to=user.email,
-        subject="Verify your Panefree Quotes email",
+        subject="Verify your Panefree Quoting email",
         html_body=html_body,
         text_body=text_body,
     )
@@ -1201,7 +1201,7 @@ def forgot_password():
             )
             mailer.send_email(
                 to=user.email,
-                subject="Reset your Panefree Quotes password",
+                subject="Reset your Panefree Quoting password",
                 html_body=render_template(
                     "email/reset.html",
                     reset_url=reset_url,
@@ -2110,6 +2110,22 @@ def dev_grant_credits():
 @login_required
 @limiter.limit("10 per minute")
 def checkout():
+    # Hotfix-7 T4: email-verified gate. Same pattern as /generate (line ~1496)
+    # but using flash + redirect because this is a form POST that 303s to
+    # Stripe Checkout, not a JSON endpoint. Fires BEFORE the Stripe session
+    # is created so unverified users never produce orphan sessions in the
+    # Stripe Dashboard. Subscribers NOT exempt (consistent with /generate —
+    # stolen-card subscription is an abuse vector).
+    user = db.session.get(User, current_user.id)
+    if not user.email_verified:
+        flash(
+            "Verify your email address before purchasing credits. "
+            "Check the verification link from your registration email, "
+            "or request a new one from your account page.",
+            "error",
+        )
+        return redirect(url_for("account"))
+
     if not config.STRIPE_SECRET_KEY:
         return jsonify({"status": "error", "message": "Stripe is not configured on this server."}), 503
 
@@ -2734,7 +2750,7 @@ def account_delete():
         # confirmation in their inbox.
         mailer.send_email(
             to=deleted_email,
-            subject="Your Panefree Quotes account is closed",
+            subject="Your Panefree Quoting account is closed",
             html_body=render_template(
                 "email/account_closed.html",
                 closed_email=deleted_email,

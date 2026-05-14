@@ -120,7 +120,7 @@ def test_postmark_error_code_returns_false(monkeypatch, caplog):
 def test_happy_path_returns_true_and_sends_correct_payload(monkeypatch, caplog):
     monkeypatch.setenv("POSTMARK_SERVER_TOKEN", "test-token-abc")
     monkeypatch.setenv("EMAIL_FROM", "support@panefreequoting.test")
-    monkeypatch.setenv("EMAIL_FROM_NAME", "Panefree Quotes")
+    monkeypatch.setenv("EMAIL_FROM_NAME", "Panefree Quoting")
 
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -147,7 +147,7 @@ def test_happy_path_returns_true_and_sends_correct_payload(monkeypatch, caplog):
     assert args[0] == mailer.POSTMARK_API_URL
     assert kwargs["headers"]["X-Postmark-Server-Token"] == "test-token-abc"
     body = kwargs["json"]
-    assert body["From"] == "Panefree Quotes <support@panefreequoting.test>"
+    assert body["From"] == "Panefree Quoting <support@panefreequoting.test>"
     assert body["To"] == "user@example.com"
     assert body["Subject"] == "Verify your email"
     assert body["HtmlBody"] == "<p>Click <a href='...'>here</a></p>"

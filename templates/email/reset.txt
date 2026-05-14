@@ -1,6 +1,6 @@
-Reset your Panefree Quotes password
+Reset your Panefree Quoting password
 
-We received a request to reset the password on your Panefree Quotes
+We received a request to reset the password on your Panefree Quoting
 account. Open the link below to set a new one. The link expires in 1 hour.
 
 {{ reset_url }}

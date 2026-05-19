@@ -297,7 +297,7 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 # still works.
 _TALISMAN_CSP = {
     "default-src": "'self'",
-    "script-src": ["'self'", "cdn.tailwindcss.com", "js.stripe.com"],
+    "script-src": ["'self'", "'unsafe-inline'", "cdn.tailwindcss.com", "js.stripe.com"],
     "style-src": ["'self'", "'unsafe-inline'", "fonts.googleapis.com"],
     "font-src": ["'self'", "fonts.gstatic.com"],
     "img-src": ["'self'", "data:"],

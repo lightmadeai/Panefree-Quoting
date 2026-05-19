@@ -2,8 +2,8 @@
 
 Hotfix-6 T1: Production WSGI server configuration.
 
-Start with 2 workers (conservative for v1 traffic; gives zero-downtime
-restarts). 30s timeout matches DEPLOYMENT.md §8. Access log to stdout
+Start with 1 worker — override via GUNICORN_WORKERS env var (conservative
+for v1 traffic; gives zero-downtime restarts). 30s timeout matches DEPLOYMENT.md §8. Access log to stdout
 so the hosting provider (Render) captures it in their log pipeline.
 
 Worker count and bind address are configurable via environment variables

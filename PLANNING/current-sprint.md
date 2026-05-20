@@ -71,7 +71,7 @@ phase: Stabilize
     5. `static/css/output.css` loads with HTTP 200 on every page
     6. Email templates (`templates/email/`) are NOT modified — they use inline styles only
 
-- [ ] **T4: Visual regression + performance comparison**
+- [x] **T4: Visual regression + performance comparison** ✅ DONE 2026-05-19. Chris verified local at 375px (iPhone SE) and via Network tab. All 15 page templates render identically to pre-migration — brand header, cards, form inputs, dropdowns, placeholders, banner styling all intact. **Page weight: ~50 kB vs prior ~450 kB (9× reduction)** — `output.css` is 1.2 kB on the wire (cached/304), no `cdn.tailwindcss.com` requests. Only remaining mobile UX issue is the nav overflow — that's Bug 5, scoped to Hotfix 9b. Not a regression from this sprint.
   - touches: none (QA only)
   - assignee: Chris
   - acceptance:

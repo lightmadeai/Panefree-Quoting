@@ -255,6 +255,50 @@ Without `ProxyFix`, every request looks like it came from the proxy's single IP 
 
 ---
 
+## 8.5 Asset pipeline — Tailwind CSS (Hotfix 9a)
+
+Pre-Hotfix-9a, every page loaded `<script src="https://cdn.tailwindcss.com">` — Tailwind's JIT compiler running in the user's browser (~400 KB of JS per page, slow FCP, widened CSP attack surface). Hotfix 9a moves Tailwind to a build-time compile that emits a single static `static/css/output.css` (~21 KB minified, gzipped further by Render's CDN).
+
+### What runs at build time
+
+Render's `buildCommand` (see `render.yaml`) chains three steps:
+
+```
+pip install -r requirements.txt   # Python deps
+npm install                       # Node deps (tailwindcss@3.4.x only)
+npm run build:css                 # tailwindcss -i input.css -o output.css --minify
+```
+
+The compiled output lands at `static/css/output.css` and is served by Flask's `static/` route. Templates reference it via `<link rel="stylesheet" href="{{ url_for('static', filename='css/output.css') }}">`.
+
+### What's NOT in git
+
+`static/css/output.css` and `node_modules/` are gitignored. `output.css` is a build artifact — regenerated from `static/css/input.css` + `tailwind.config.js` + `templates/**/*.html` on every deploy. Never edit `output.css` by hand.
+
+### Local dev workflow
+
+When editing templates locally and you want CSS changes reflected immediately:
+
+```bash
+npm install                # one-time
+npm run dev:css            # runs tailwindcss --watch in the foreground
+```
+
+The watch mode rebuilds `output.css` on every file save. Run it in a separate terminal alongside `python app.py`. If you don't run it, your local pages will reference a stale or missing `output.css` — most likely you'll see an unstyled page until you run `npm run build:css` once.
+
+### Updating `tailwind.config.js`
+
+The config has two important arrays:
+
+- **`content`** — globs Tailwind scans for class names. Currently `./templates/**/*.html` (excluding `templates/email/`) and `./static/js/**/*.js`. If you add a new template directory or JS source, add its glob here.
+- **`safelist`** — classes that must be in the compiled CSS even if Tailwind's scanner doesn't find them in source. Currently 6 classes from `templates/index.html`'s `classList.add/remove` calls. See `PLANNING/research/class-audit.md` for the full audit. If you add new `classList.*` calls or build class strings via JS string concat, audit the new classes and add them here.
+
+### CSP interaction (Hotfix 10 boundary)
+
+Hotfix 9a removes `cdn.tailwindcss.com` from `script-src` (it's no longer needed — the CDN was the only third-party script source). It does NOT remove `'unsafe-inline'` from `script-src` — that's deferred to Hotfix 10, which first externalizes the inline `<script>` blocks in `index.html` and then tightens CSP. `style-src 'unsafe-inline'` stays for now (templates have inline `<style>` blocks with the Inter font-family declaration).
+
+---
+
 ## 9. Log catalog (Hotfix-4 T3)
 
 Every `app.logger.warning` and `app.logger.error` line in `app.py` carries a structured `[TAG]` prefix so log searches are deterministic. This catalog is the source of truth for "what does this log line mean and how do I respond." Sentry alert rules (Operations runbook §10) key off these tags.

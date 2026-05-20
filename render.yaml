@@ -1,0 +1,21 @@
+# Infrastructure-as-code for Render. Replaces dashboard-only buildCommand.
+#
+# Build phase: install Python deps, install Node deps, compile Tailwind CSS
+# to static/css/output.css. The compiled CSS is a build artifact (gitignored)
+# and must be regenerated on every deploy.
+#
+# Runtime: gunicorn picks up GUNICORN_BIND from the environment. On Render
+# we override 127.0.0.1:5001 (dev default in gunicorn.conf.py) to
+# 0.0.0.0:$PORT so Render's load balancer can reach the worker.
+services:
+  - type: web
+    name: panefree-quoting
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt && npm install && npm run build:css
+    startCommand: gunicorn -c gunicorn.conf.py app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.4
+      - key: GUNICORN_BIND
+        value: 0.0.0.0:$PORT

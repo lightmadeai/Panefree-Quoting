@@ -47,7 +47,7 @@ phase: Stabilize
     4. All dynamic/JS-only classes documented in safelist array in `tailwind.config.js`
     5. Audit file saved to `PLANNING/research/class-audit.md`
 
-- [ ] **T2: Build pipeline setup**
+- [x] **T2: Build pipeline setup** ✅ DONE 2026-05-19. `npm install` clean (74 packages, 0 vulns). `npm run build:css` emits 21K minified `static/css/output.css` in 284ms. DEPLOYMENT.md §8.5 added.
   - touches: `package.json`, `tailwind.config.js`, `static/css/input.css`, `render.yaml`, `DEPLOYMENT.md`, `.gitignore`
   - assignee: Claude
   - acceptance:

@@ -1,0 +1,13 @@
+{
+  "name": "panefree-quoting",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tailwind CSS build pipeline for Panefree Quoting Flask app. The Python app itself does not consume Node — this package is purely for compiling static/css/output.css from Tailwind sources.",
+  "scripts": {
+    "build:css": "tailwindcss -i ./static/css/input.css -o ./static/css/output.css --minify",
+    "dev:css": "tailwindcss -i ./static/css/input.css -o ./static/css/output.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

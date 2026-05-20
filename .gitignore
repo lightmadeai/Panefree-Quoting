@@ -24,3 +24,10 @@ output/
 # Pre-sprint DB backups
 *.bak
 *.bak-*
+
+# Node / Tailwind build artifacts (Hotfix 9a — compiled CSS regenerated
+# on every deploy via npm run build:css; node_modules large + reproducible
+# from package.json lockfile).
+node_modules/
+static/css/output.css
+

@@ -282,22 +282,26 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 # Hotfix-2 T4 (part 2): security response headers via Flask-Talisman.
 #
 # CSP allowlist matches the third-party assets actually loaded:
-#   - cdn.tailwindcss.com (script)            — base styling JIT
 #   - fonts.googleapis.com (style)            — Google Fonts CSS
 #   - fonts.gstatic.com (font)                — Google Fonts files
 #   - js.stripe.com (script + frame)          — Stripe Checkout JS + iframe
 #   - api.stripe.com (connect)                — Stripe API from JS
 # style-src needs 'unsafe-inline' because templates use <style> blocks.
-# script-src does NOT — and there are no inline <script> blocks that
-# would need it (all our inline JS lives at file scope; the CSP nonce
-# pattern is overkill for this size of app).
+# script-src needs 'unsafe-inline' because index.html has inline <script>
+# blocks (profile-data injection + populateRates definition). H8 added
+# this; H10 will externalize the inline scripts to static/js/ and then
+# remove 'unsafe-inline' from script-src.
+#
+# Hotfix 9a: removed `cdn.tailwindcss.com` from script-src — Tailwind is
+# now compiled to static/css/output.css at build time, so the CDN script
+# is no longer loaded. See DEPLOYMENT.md §8.5.
 #
 # force_https mirrors the cookie-SECURE gate from T1: prod redirects HTTP
 # -> HTTPS, dev (DEV_MODE=1) skips the redirect so plain-HTTP localhost
 # still works.
 _TALISMAN_CSP = {
     "default-src": "'self'",
-    "script-src": ["'self'", "'unsafe-inline'", "cdn.tailwindcss.com", "js.stripe.com"],
+    "script-src": ["'self'", "'unsafe-inline'", "js.stripe.com"],
     "style-src": ["'self'", "'unsafe-inline'", "fonts.googleapis.com"],
     "font-src": ["'self'", "fonts.gstatic.com"],
     "img-src": ["'self'", "data:"],

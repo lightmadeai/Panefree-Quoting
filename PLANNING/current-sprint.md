@@ -60,8 +60,8 @@ phase: Stabilize
     7. `.gitignore` updated: `static/css/output.css` added (build artifact, regenerated on each deploy)
     8. `DEPLOYMENT.md` updated with build step documentation and `npm run dev:css` watch mode for local development
 
-- [ ] **T3: Replace CDN with compiled CSS in all 15 page templates**
-  - touches: all 15 non-partial, non-email page templates in `templates/`
+- [x] **T3: Replace CDN with compiled CSS in all 15 page templates** ✅ DONE 2026-05-19. All 15 templates patched; CSP `script-src` reduced from 4 → 3 entries (`cdn.tailwindcss.com` removed). `unsafe-inline` retained — deferred to H10. Smoke test: `/login` returns 200, `/static/css/output.css` returns 200, response CSP header verified.
+  - touches: all 15 non-partial, non-email page templates in `templates/` + `app.py` (CSP)
   - assignee: Claude
   - acceptance:
     1. Every page template: `<script src="https://cdn.tailwindcss.com"></script>` replaced with `<link rel="stylesheet" href="{{ url_for('static', filename='css/output.css') }}">`

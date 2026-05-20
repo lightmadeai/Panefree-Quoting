@@ -83,10 +83,10 @@ phase: Stabilize
   - touches: none (QA only)
   - assignee: Claude + Chris
   - acceptance:
-    1. `python -m pytest` passes with no new failures (same 36 pre-existing, 66 passes as H8 baseline)
-    2. CSP response header verified: `script-src` contains `'self' 'unsafe-inline' https://js.stripe.com` but NOT `cdn.tailwindcss.com`
-    3. No CSP violations in browser console on any page
-    4. Quote form fully functional end-to-end (select service → get price → submit → PDF download)
+    1. [x] `python -m pytest` passes with no new failures — **84 passed, 18 failed** (vs H8 baseline 66 passed, 36 failed). Net -18 failures, zero new failures. Improvement attributed to dep reinstall from `pip install -r requirements.txt` (Sonnet 4.6's openclaw-dispatched session in H8 had stale venv; this session's reinstall restored Stripe/webhook test mocks to expected versions).
+    2. [ ] CSP response header verified: `script-src` contains `'self' 'unsafe-inline' https://js.stripe.com` but NOT `cdn.tailwindcss.com` — Claude verified locally; Chris to verify on live after deploy.
+    3. [ ] No CSP violations in browser console on any page — Chris.
+    4. [ ] Quote form fully functional end-to-end (select service → get price → submit → PDF download) — Chris.
 
 ---
 

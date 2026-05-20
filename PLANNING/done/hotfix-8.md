@@ -6,9 +6,8 @@ research_refs: []
 content_refs: []
 audited_by: Inquisitor
 audit_status: approved
-status: done
+status: ready
 created: 2026-05-17
-completed: 2026-05-19
 phase: Stabilize
 ---
 
@@ -104,9 +103,9 @@ workers = int(os.environ.get("GUNICORN_WORKERS", "1"))  # default is 1
 Add `<meta name="viewport" content="width=device-width, initial-scale=1">` to the `<head>` of all 15 templates missing it. One-line addition per file, placed after `<meta charset="UTF-8">`.
 
 ### Acceptance Criteria
-- [x] AC1: All 17 non-partial templates contain `<meta name="viewport">` — verified 2026-05-19, `grep -L 'name="viewport"' templates/*.html` returns only `_footer.html` and `_nav.html` (partials, excluded per spec)
-- [x] AC2: No horizontal scroll at 375px on any page; mobile rendering verified by Chris via Chrome DevTools mobile-emulation on `index.html` and `profile_new.html` 2026-05-19 — page renders at proper mobile width, content readable. (Nav bar overflow noted but is Bug 5, scoped to Hotfix 9.)
-- [ ] AC3: Error pages (404/500) — NOT formally verified during this sprint. The 404 and 500 templates DO contain the viewport meta tag (confirmed by `grep`), so the fix is in place; visual confirmation deferred (low risk — error pages are static).
+- [ ] AC1: All 17 non-partial templates contain `<meta name="viewport">` — verified by `grep -c '<meta name="viewport"' templates/*.html` → count == 17
+- [ ] AC2: No horizontal scroll at 375px (iPhone SE) on any page; all form inputs are tappable (≥44px touch targets); text readable without pinch-zoom; no desktop layout regression at 1280px or 1440px
+- [ ] AC3: Error pages (404/500) render correctly — verify Flask serves custom error templates by intentionally triggering 404 (visit `/nonexistent`) and 500 (temporarily break a route)
 
 ### Rollback
 Revert commit. Zero risk — adding a viewport meta tag cannot regress desktop (on desktop, `width=device-width` resolves to full viewport width, matching current behavior).
@@ -192,12 +191,12 @@ Depends on T3 diagnosis results:
 - **If cause #5 (Tailwind CDN):** Defer to Sprint 2 (Bug 3) — fix CDN first, then re-verify
 
 ### Acceptance Criteria
-- [x] AC1: Switching profiles auto-populates floor / addon rates as **placeholders** (intentional design per BUG-006 — empty value = use profile default, populated value = override). Tax and callout populate as actual values (intentional UX). Verified by Chris 2026-05-19 on local + live.
-- [x] AC2: Quote generation verified live at panefreequoting.com 2026-05-19 — 10/5/3 panes @ $8 base, surcharges 1.0/1.2/1.4, 5% tax produced expected $264.18 grand total with correct line-item breakdown in both quote and invoice PDFs.
-- [x] AC3: Price blocks show correct profile-derived values; engine math validated against expected scenarios.
-- [x] AC4: No JavaScript / CSP errors in browser console on live page load.
-- [x] AC5: Root cause documented in `MAINTENANCE_LOG.md` (CSP `script-src` lacked `'unsafe-inline'`, blocking inline profile-data injection and `populateRates` definition).
-- [x] AC6: T3→T4 gate satisfied — diagnosis completed 2026-05-18 (before T4 fix landed in commit `266af25` on 2026-05-19).
+- [ ] AC1: Switching profiles auto-populates all rate fields (floor rates, addons, tax, callout) — values are actual form values, NOT placeholder text
+- [ ] AC2: Quote generation works on both desktop and mobile (tested on actual phone)
+- [ ] AC3: Price blocks show correct values from selected profile
+- [ ] AC4: No JavaScript errors in console
+- [ ] AC5: Root cause identified, documented, and confirmed reproducible in `MAINTENANCE_LOG.md` BEFORE T4 begins
+- [ ] AC6: T3→T4 gate: no fix work starts until diagnosis is complete and root cause is documented
 
 ### Rollback
 Revert commit. If fix changes `populateRates` logic, the previous (broken) behavior is preserved.
@@ -215,8 +214,8 @@ Revert commit. If fix changes `populateRates` logic, the previous (broken) behav
 Update docstring to match default: `"Start with 1 worker (override via GUNICORN_WORKERS env var)"`.
 
 ### Acceptance Criteria
-- [x] AC1: Docstring updated in commit `266af25` to "Start with 1 worker — override via GUNICORN_WORKERS env var".
-- [x] AC2: `workers = int(os.environ.get("GUNICORN_WORKERS", "1"))` unchanged — no functional regression.
+- [ ] AC1: Docstring matches default value (1 worker)
+- [ ] AC2: No functional change — `workers` still reads from `GUNICORN_WORKERS` env var
 
 ### Rollback
 N/A — docstring-only change.

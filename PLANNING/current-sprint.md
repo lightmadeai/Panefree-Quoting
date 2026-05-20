@@ -6,9 +6,10 @@ research_refs: []
 content_refs: []
 audited_by: Inquisitor
 audit_status: approved-with-modifications
-status: draft
+status: active
 created: 2026-05-19
 revised: 2026-05-19 (v2 — Inquisitor M1-M6 incorporated)
+started: 2026-05-19
 phase: Stabilize
 ---
 
@@ -36,9 +37,9 @@ phase: Stabilize
 
 ## Tasks
 
-- [ ] **T1: Dynamic class audit + safelist compilation**
-  - touches: `tailwind.config.js` (safelist)
-  - assignee: Jade
+- [x] **T1: Dynamic class audit + safelist compilation** ✅ DONE 2026-05-19 (Claude per Chris dispatch)
+  - touches: `tailwind.config.js` (safelist) — to be created in T2 with safelist from `PLANNING/research/class-audit.md`
+  - assignee: ~~Jade~~ Claude (re-assigned)
   - acceptance:
     1. `grep -r "class=" templates/` produces complete list of all Tailwind classes used across all 15 page templates (excluding `_nav.html`, `_footer.html` partials and `templates/email/` — they don't use Tailwind)
     2. `grep -r "classList\." templates/` produces list of all JS-manipulated classes. Specifically in `index.html` lines 361-362, 667-668, 369, 371, 420, 634, 673, 682, 701 — classes: `hidden`, `bg-slate-800`, `text-slate-300`, `bg-emerald-600`, `hover:bg-emerald-500`, `text-white`

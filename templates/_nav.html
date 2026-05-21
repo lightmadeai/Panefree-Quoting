@@ -1,6 +1,14 @@
-<nav class="industrial-gradient text-white py-4 px-6 shadow-lg flex justify-between items-center">
-    <a href="{{ url_for('index') }}" class="text-2xl font-bold tracking-tight">Panefree<span class="text-blue-400"> Quoting</span></a>
-    <div class="text-sm flex items-center gap-4">
+<nav class="industrial-gradient text-white py-4 px-6 shadow-lg flex justify-between items-center gap-4">
+    {# Logo — text logo SVG (Fiverr commission, Hotfix 9b T3). Replaces
+       the previous "Panefree Quoting" wordmark span. Same href to home. #}
+    <a href="{{ url_for('index') }}" class="block flex-shrink-0">
+        <img src="{{ url_for('static', filename='img/logo-light.svg') }}"
+             alt="Panefree Quoting"
+             class="h-8 md:h-10 w-auto">
+    </a>
+
+    <div class="flex items-center gap-4">
+        {# Credit / subscription badge — visible at all widths. #}
         {% if current_user.subscription_status == 'active' %}
             <span id="credit-badge" class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold mono text-xs">
                 Unlimited · {% if current_user.cancel_at_period_end %}cancels{% else %}renews{% endif %} {{ current_user.subscription_current_period_end.strftime('%Y-%m-%d') if current_user.subscription_current_period_end else 'soon' }}
@@ -14,15 +22,67 @@
                 {{ current_user.credit_balance }} credits
             </span>
         {% endif %}
-        <a href="{{ url_for('index') }}" class="opacity-80 hover:opacity-100 hover:underline">Quote</a>
-        <a href="{{ url_for('history') }}" class="opacity-80 hover:opacity-100 hover:underline">History</a>
-        <a href="{{ url_for('profiles_list') }}" class="opacity-80 hover:opacity-100 hover:underline">Profiles</a>
-        <a href="{{ url_for('account') }}" class="opacity-80 hover:opacity-100 hover:underline">Account</a>
-        <a href="{{ url_for('top_up') }}" class="opacity-80 hover:opacity-100 hover:underline">Buy credits</a>
-        <span class="opacity-60 text-xs">{{ current_user.email }}</span>
-        <a href="{{ url_for('logout') }}" class="opacity-80 hover:opacity-100 hover:underline">Sign out</a>
+
+        {# Desktop nav links (>=md). Hidden on mobile — drawer carries them there. #}
+        <div class="hidden md:flex items-center gap-4 text-sm">
+            <a href="{{ url_for('index') }}" class="opacity-80 hover:opacity-100 hover:underline">Quote</a>
+            <a href="{{ url_for('history') }}" class="opacity-80 hover:opacity-100 hover:underline">History</a>
+            <a href="{{ url_for('profiles_list') }}" class="opacity-80 hover:opacity-100 hover:underline">Profiles</a>
+            <a href="{{ url_for('account') }}" class="opacity-80 hover:opacity-100 hover:underline">Account</a>
+            <a href="{{ url_for('top_up') }}" class="opacity-80 hover:opacity-100 hover:underline">Buy credits</a>
+            <span class="opacity-60 text-xs">{{ current_user.email }}</span>
+            <a href="{{ url_for('logout') }}" class="opacity-80 hover:opacity-100 hover:underline">Sign out</a>
+        </div>
+
+        {# Mobile hamburger (<md). Tap opens the drawer below. #}
+        <button id="nav-hamburger" type="button"
+                class="md:hidden p-2 -mr-2 text-white"
+                aria-label="Open navigation menu"
+                aria-expanded="false"
+                aria-controls="mobile-drawer">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+            </svg>
+        </button>
     </div>
 </nav>
+
+{# Mobile drawer overlay (semi-transparent backdrop). Click closes drawer. #}
+<div id="mobile-drawer-overlay"
+     class="md:hidden hidden fixed inset-0 bg-black/50 z-40"
+     aria-hidden="true"></div>
+
+{# Mobile drawer panel. Slides in from the right via translate-x toggle in nav.js. #}
+<aside id="mobile-drawer"
+       class="md:hidden fixed inset-y-0 right-0 w-4/5 max-w-xs bg-slate-900 text-white z-50 transform translate-x-full transition-transform duration-300 ease-in-out overflow-y-auto"
+       aria-hidden="true"
+       aria-label="Mobile navigation">
+    <div class="p-6 flex flex-col gap-1">
+        <div class="flex items-center justify-between mb-6">
+            <img src="{{ url_for('static', filename='img/logo-light.svg') }}" alt="Panefree Quoting" class="h-8 w-auto">
+            <button id="nav-hamburger-close" type="button" class="p-2 -mr-2" aria-label="Close navigation menu">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <a href="{{ url_for('index') }}" class="block py-3 px-2 rounded hover:bg-white/10 transition-colors">Quote</a>
+        <a href="{{ url_for('history') }}" class="block py-3 px-2 rounded hover:bg-white/10 transition-colors">History</a>
+        <a href="{{ url_for('profiles_list') }}" class="block py-3 px-2 rounded hover:bg-white/10 transition-colors">Profiles</a>
+        <a href="{{ url_for('account') }}" class="block py-3 px-2 rounded hover:bg-white/10 transition-colors">Account</a>
+        <a href="{{ url_for('top_up') }}" class="block py-3 px-2 rounded hover:bg-white/10 transition-colors">Buy credits</a>
+        <div class="mt-4 pt-4 border-t border-white/20">
+            <p class="text-xs opacity-60 px-2 mb-2 break-all">{{ current_user.email }}</p>
+            <a href="{{ url_for('logout') }}" class="block py-3 px-2 rounded hover:bg-white/10 transition-colors">Sign out</a>
+        </div>
+    </div>
+</aside>
+
+{# External nav.js handles drawer open/close/Escape/outside-click.
+   Loaded with defer so it runs after the DOM is parsed. Externalized
+   (not inline) so it survives Hotfix 10's removal of script-src
+   'unsafe-inline'. #}
+<script defer src="{{ url_for('static', filename='js/nav.js') }}"></script>
 {# Hotfix-3 T2: persistent unverified-email banner. Shows on every
    authenticated page until the user clicks the verify link in their
    email. POST-only form (CSRF token from Hotfix-2) hitting

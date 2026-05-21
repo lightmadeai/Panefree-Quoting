@@ -1,35 +1,83 @@
 ---
-label: (no active sprint)
+sprint: 9b
 project: window-quoting
-phase: post-launch (Hotfix 9a closed)
-status: idle — awaiting next sprint adoption
-last_completed: hotfix-9a (DONE 2026-05-19, Inquisitor post-audit pending)
-launch_marker: v1.0.0 on commit 7210991 (live at https://panefreequoting.com)
-next_up: hotfix-9b (mobile nav drawer) — in `drafts/hotfix-9b.md`, pending pre-audit
+drafted_by: Jade
+research_refs: []
+content_refs: []
+audited_by: Inquisitor
+audit_status: approved
+status: active
+created: 2026-05-19
+started: 2026-05-20
+revised: 2026-05-19 (v3 — logo integration task T3 added)
+phase: Stabilize
 ---
 
-# Current Sprint: None — Hotfix 9a Closed
+# Hotfix 9b — Mobile Nav Overflow + Logo Integration
 
-Hotfix 9a (Tailwind CDN → compiled CSS) shipped and verified live 2026-05-19. No sprint is currently active.
+*Split from Hotfix 9 per Inquisitor re-audit. v2 incorporated advisory R1/R2. v3 adds T3 (logo integration — Fiverr commission received). Depends on Hotfix 9a completion (compiled CSS must exist).*
 
-## Pipeline Status
-- **Hotfix-2 through Hotfix-9a:** all DONE (H8 post-audit PASS; H9a post-audit pending)
-- **v1.0.0:** ✅ LIVE at https://panefreequoting.com — page weight reduced ~9× by Tailwind compile
-- **Next sprints in flight:**
-  - `drafts/hotfix-9b.md` — Mobile nav drawer (Bug 5). Depends on H9a (now closed). Pending Inquisitor pre-audit.
-  - `drafts/hotfix-10.md` — CSP hardening (externalize index.html inline scripts + remove `unsafe-inline`). Depends on H9a. Pending Inquisitor pre-audit.
+---
 
-## Recent close-outs
-- `PLANNING/done/hotfix-9a.md` — Tailwind CDN migration; CSP `cdn.tailwindcss.com` removed; build pipeline via Render dashboard buildCommand (render.yaml in repo but not active — flagged for future Blueprint conversion)
-- `PLANNING/notes/hotfix-9a-notes.md` — execution notes
-- `PLANNING/research/class-audit.md` — T1 deliverable (safelist source-of-truth)
+## Current State
 
-## Known follow-ups
-- **render.yaml not auto-active on existing Render service** — dashboard buildCommand manually updated to `pip install -r requirements.txt && npm install && npm run build:css`. render.yaml lives in repo as documentation + Blueprint-ready config for any future fresh service. Worth proper Blueprint conversion in a low-priority infra sprint.
-- **A11y label warnings on quote / account pages** (20 + 5 instances) — pre-existing, surfaced during H9a live QA. Logged for post-launch backlog.
-- **Bug 1 AC3 (404/500 visual verification)** — still deferred from H8.
+### Bug 5. Mobile Nav Bar Overflow
 
-When ready for H9b / H10:
-1. Inquisitor pre-audits each draft
-2. On approval, Jade promotes the draft → `current-sprint.md`
-3. Cut a new sprint branch off `master`
+On viewports <768px, the nav bar wraps to 3 rows consuming ~30% of viewport height. 7+ nav items don't fit in a single row at mobile widths.
+
+**Solution:** Hamburger menu + slide-out drawer (right side, 80% width). Standard Material Design pattern.
+
+---
+
+## Tasks
+
+- [x] **T1: Hamburger + drawer implementation** ✅ DONE 2026-05-20. New `_nav.html` collapses to logo + credit pill + hamburger at `<md`; drawer slides in from right (80% w / max-w-xs) with all nav items + email + Sign out. Closes on outside-tap, link-tap, Escape, or resize ≥768px. All JS in externalized `static/js/nav.js` (defer-loaded, CSP-safe). All 15 AC6-required classes verified in compiled `output.css`; full _nav.html class-set audit shows 76 of 78 classes from Tailwind (remaining 2 are pre-existing custom `industrial-gradient` / `mono` inline-style classes).
+  - touches: `templates/_nav.html`, `static/js/nav.js`
+  - assignee: Claude
+  - acceptance:
+    1. At <768px: nav items hidden, hamburger icon visible in single-row nav bar
+    2. Hamburger tap opens slide-out drawer (right side, 80% viewport width) containing all nav items with ≥44px tap targets
+    3. Drawer closes on: outside-tap (semi-transparent `bg-black/50` overlay), nav link click, Escape key
+    4. At ≥768px: nav unchanged from current behavior (no hamburger, no drawer)
+    5. All drawer JS in externalized `static/js/nav.js` (survives CSP — no inline script)
+    6. All new Tailwind classes present in compiled `output.css`: `md:hidden`, `md:flex`, `hidden`, `translate-x-full`, `translate-x-0`, `transition-transform`, `duration-300`, `ease-in-out`, `fixed`, `inset-y-0`, `right-0`, `w-4/5`, `z-50`, `overflow-y-auto`, `bg-black/50` — verified by `grep` for each class in `static/css/output.css`. Note: this is a minimum list; Claude must verify ALL newly-introduced classes in `_nav.html` appear in compiled CSS, not just the enumerated ones.
+    7. Semi-transparent overlay (`bg-black/50`) renders behind drawer when open
+    8. Drawer self-tested on real Android device by Chris (informal verification during development; formal QA in T2)
+
+- [x] **T3: Logo integration** ✅ DONE 2026-05-20. Fiverr text-logo SVG copied to `static/img/logo.svg` (12K — original colors for light backgrounds, future use in PDFs). Light-variant `static/img/logo-light.svg` generated by swapping `#063056` → `#FFFFFF` (sky-blue icon `#90D5FF` and grey accent `#CCCDCE` unchanged) for use on dark nav backgrounds. Path AC1 (`static/images/`) is a typo — corrected to project convention `static/img/` per Chris. Logo placements: desktop nav, mobile nav header, drawer header, and the 4 pre-login templates (login, register, forgot_password, reset_password) replacing the old text-only brand span. 404/500 don't render a visible brand. Source archive `static/img/Panefree Quoting Logo Source Files*` gitignored (1.3MB vendor archive, kept locally only).
+  - touches: `templates/_nav.html`, `templates/{login,register,forgot_password,reset_password}.html`, `static/img/logo.svg`, `static/img/logo-light.svg`
+  - assignee: Claude
+  - acceptance:
+    1. Fiverr logo file placed in `static/images/` (SVG preferred, PNG fallback at 2x resolution)
+    2. Logo displays in nav bar next to brand name on desktop (≥768px)
+    3. Logo displays in hamburger nav bar on mobile (<768px) — may be icon-only at small widths
+    4. Logo in drawer header above nav links
+    5. Logo links to home page (`/`)
+    6. `alt` text set to brand name for accessibility
+    7. Logo file size <50KB (optimize if needed)
+
+- [ ] **T2: Mobile nav + logo QA**
+  - touches: none (QA only)
+  - assignee: Chris
+  - acceptance:
+    1. No CSP violations in browser console related to `nav.js`
+    2. `static/js/nav.js` loads with HTTP 200
+    3. Visual correct at 320px, 375px, 414px (mobile) and 768px, 1280px (desktop)
+    4. No nav-related layout shifts or CLS issues
+    5. Real Android device test: drawer opens, closes, navigates correctly
+    6. Semi-transparent overlay renders correctly on mobile
+    7. Logo displays correctly at all breakpoints, links to home, accessible alt text present
+
+---
+
+**Sprint type:** Stabilize (UX fix)
+**Estimated complexity:** S (single component, externalized JS)
+**Rollback:** Remove hamburger/drawer markup from `_nav.html`, delete `nav.js`, restore flex-wrap behavior.
+
+**Dependency:** Hotfix 9a must be complete (compiled CSS with all required classes available).
+
+**Explicit non-scope:**
+- Tailwind CDN migration (HF9a)
+- `unsafe-inline` removal (HF10)
+
+**Prerequisite:** Chris provides logo file (Fiverr commission — received 2026-05-19). Drop into `projects/window-quoting/static/images/` before Claude starts T3.

@@ -24,6 +24,13 @@ module.exports = {
     'bg-emerald-600',
     'hover:bg-emerald-500',
     'text-white',
+    // Hotfix 9b: mobile nav drawer transform classes — toggled via
+    // classList.add/remove in static/js/nav.js to slide the drawer.
+    // Both states appear statically in _nav.html too (initial closed
+    // state), but kept in the safelist for defense against future
+    // refactors that might remove the static reference.
+    'translate-x-full',
+    'translate-x-0',
   ],
   theme: {
     extend: {},

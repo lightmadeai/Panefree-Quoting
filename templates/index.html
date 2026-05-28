@@ -191,240 +191,8 @@
                     </div>
 
                     <script id="profiles-data" type="application/json">{{ profiles_data | tojson }}</script>
-                    <script>
-                    // BUG-004 (Sprint 4): persist quote-form state across navigation
-                    // so a user who runs out of credits mid-fill can buy more and
-                    // return without re-entering everything.
-                    //
-                    //   save:    on every input change (named fields + checked addons)
-                    //   restore: on DOMContentLoaded, only if no server-rendered values
-                    //            are present (server values take precedence — they're
-                    //            from a fresh /calculate post)
-                    //   clear:   after a successful /generate response (the credit was
-                    //            spent, the form data has been used)
-                    //
-                    // Storage is sessionStorage scoped to a single key so it's wiped
-                    // when the browser/tab closes — no cross-session bleed.
-                    (function () {
-                        const KEY = 'pf_quote_draft_v1';
-                        const form = document.getElementById('quote-form');
-                        if (!form) return;
-                        // Server-rendered "submitted_*" values mean the user just hit
-                        // /calculate and got the preview — don't clobber that with a
-                        // stale draft from sessionStorage.
-                        const labelEl = form.querySelector('[name="label"]');
-                        const serverHasValues = !!(labelEl && labelEl.value);
-
-                        function snapshot() {
-                            const data = { fields: {}, addons: [] };
-                            form.querySelectorAll('input[name], select[name], textarea[name]').forEach(el => {
-                                if (el.type === 'checkbox') {
-                                    if (el.name === 'addon' && el.checked) data.addons.push(el.value);
-                                } else if (el.type === 'submit' || el.type === 'button') {
-                                    /* skip */
-                                } else {
-                                    data.fields[el.name] = el.value;
-                                }
-                            });
-                            return data;
-                        }
-                        function save() {
-                            try { sessionStorage.setItem(KEY, JSON.stringify(snapshot())); } catch (e) {}
-                        }
-                        function restore() {
-                            let raw;
-                            try { raw = sessionStorage.getItem(KEY); } catch (e) { return; }
-                            if (!raw) return;
-                            let data; try { data = JSON.parse(raw); } catch (e) { return; }
-                            if (!data || typeof data !== 'object') return;
-                            Object.entries(data.fields || {}).forEach(([name, v]) => {
-                                const el = form.querySelector(`[name="${CSS.escape(name)}"]`);
-                                if (el && (el.type !== 'checkbox') && el.value === '') el.value = v;
-                            });
-                            (data.addons || []).forEach(value => {
-                                const el = form.querySelector(`input[name="addon"][value="${CSS.escape(value)}"]`);
-                                if (el) el.checked = true;
-                            });
-                            // Re-fire change on the profile select so populateRates re-runs
-                            const sel = form.querySelector('[name="profile_id"]');
-                            if (sel) sel.dispatchEvent(new Event('change'));
-                        }
-                        function clearDraft() {
-                            try { sessionStorage.removeItem(KEY); } catch (e) {}
-                        }
-
-                        // Expose the clearer so the /generate success handler can call it.
-                        window.__clearQuoteDraft = clearDraft;
-
-                        // Save on any input change. Debounced lightly — typing fires a
-                        // lot of events, no need to thrash sessionStorage on every keystroke.
-                        let t = null;
-                        form.addEventListener('input', () => { clearTimeout(t); t = setTimeout(save, 200); });
-                        form.addEventListener('change', save);
-
-                        if (!serverHasValues) {
-                            // Defer to DOMContentLoaded if we got here before parse finished.
-                            if (document.readyState === 'loading') {
-                                document.addEventListener('DOMContentLoaded', restore);
-                            } else {
-                                restore();
-                            }
-                        }
-                    })();
-                    </script>
-                    <script>
-                    (function () {
-                        const profilesData = JSON.parse(document.getElementById('profiles-data').textContent);
-                        const select = document.getElementById('profile-select');
-
-                        const setVal = (name, v) => {
-                            const el = document.querySelector(`[name="${name}"]`);
-                            if (el && v !== undefined && v !== null) el.value = v;
-                        };
-                        // BUG-006 fix (Sprint 4): floor + addon override fields use
-                        // placeholder rather than value so the engine doesn't see them
-                        // as "custom" when the user accepts the default. Pre-fix,
-                        // populateRates wrote the computed default into .value, which
-                        // engine.py then flagged as an override on every line item —
-                        // so every quote PDF read "(Custom Rate)" even when nothing
-                        // was customized. Setting placeholder leaves .value empty
-                        // unless the user explicitly types a different number.
-                        const setPlaceholder = (name, v) => {
-                            const el = document.querySelector(`[name="${name}"]`);
-                            if (el && v !== undefined && v !== null) {
-                                el.placeholder = v;
-                                // Also clear any stale value left over from a previous
-                                // profile selection — switching profiles must not leave
-                                // the old default's number in the field.
-                                el.value = '';
-                            }
-                        };
-
-                        function populateRates(profileName) {
-                            const p = profilesData[profileName];
-                            if (!p) return;
-                            const br = Number(p.base_pane_rate) || 0;
-                            const ss = p.story_surcharges || {};
-                            setPlaceholder('override_floor1', (br * (Number(ss.floor1) || 1)).toFixed(2));
-                            setPlaceholder('override_floor2', (br * (Number(ss.floor2) || 1)).toFixed(2));
-                            setPlaceholder('override_floor3', (br * (Number(ss.floor3) || 1)).toFixed(2));
-
-                            const ar = p.add_on_rates || {};
-                            const addonMap = {
-                                'Screen Cleaning': 'override_addon_Screen_Cleaning',
-                                'Track Cleaning': 'override_addon_Track_Cleaning',
-                                'Hard Water Treatment': 'override_addon_Hard_Water_Treatment',
-                            };
-                            for (const [addonName, field] of Object.entries(addonMap)) {
-                                const v = ar[addonName];
-                                setPlaceholder(field, v !== undefined ? Number(v).toFixed(2) : '');
-                            }
-
-                            // Callout and tax remain as actual values (auto-filled +
-                            // editable). These don't drive a "(Custom Rate)" label —
-                            // tax_override is a separate engine code path, callout is
-                            // a registry mutation. So pre-filling them is intended UX.
-                            setVal('tax_override_percent', (Number(p.tax_rate || 0) * 100).toFixed(1));
-                            setVal('callout_override', Number(p.base_callout_fee || 0).toFixed(2));
-                        }
-
-                        select.addEventListener('change', () => populateRates(select.value));
-                        // Initial population must wait for DOMContentLoaded: this script
-                        // is inline above the override inputs (override_floor1, addon
-                        // rates, tax/callout). At parse time those elements don't exist
-                        // yet, so querySelector returns null and setVal silently no-ops.
-                        // Deferring to DOMContentLoaded guarantees the full form is in
-                        // the DOM before we try to fill it.
-                        const initialPopulate = () => {
-                            if (select.value) populateRates(select.value);
-                        };
-                        if (document.readyState === 'loading') {
-                            document.addEventListener('DOMContentLoaded', initialPopulate);
-                        } else {
-                            initialPopulate();
-                        }
-
-                        // Expose for the inline-new-profile JS below to call after creating a profile
-                        window.__populateRates = populateRates;
-                        window.__profilesData = profilesData;
-                    })();
-
-                    (function () {
-                        const toggle = document.getElementById('new-profile-toggle');
-                        const closeBtn = document.getElementById('new-profile-close');
-                        const cancelBtn = document.getElementById('new-profile-cancel');
-                        const panel = document.getElementById('new-profile-panel');
-                        const saveBtn = document.getElementById('new-profile-save');
-                        const errEl = document.getElementById('new-profile-error');
-                        const select = document.getElementById('profile-select');
-
-                        const open = () => { panel.classList.remove('hidden'); errEl.classList.add('hidden'); };
-                        const close = () => { panel.classList.add('hidden'); };
-
-                        toggle.addEventListener('click', open);
-                        closeBtn.addEventListener('click', close);
-                        cancelBtn.addEventListener('click', close);
-
-                        saveBtn.addEventListener('click', async function () {
-                            errEl.classList.add('hidden');
-                            const name = document.getElementById('np-name').value.trim();
-                            if (!name) { errEl.textContent = 'Name is required.'; errEl.classList.remove('hidden'); return; }
-
-                            const num = id => parseFloat(document.getElementById(id).value);
-                            const price_data = {
-                                base_pane_rate: num('np-base-rate'),
-                                base_callout_fee: num('np-callout'),
-                                tax_rate: num('np-tax') / 100,  // user enters percent, stored as decimal
-                                story_surcharges: { floor1: num('np-f1'), floor2: num('np-f2'), floor3: num('np-f3') },
-                                add_on_rates: {
-                                    'Screen Cleaning': num('np-screen'),
-                                    'Track Cleaning': num('np-track'),
-                                    'Hard Water Treatment': num('np-hardwater'),
-                                },
-                            };
-
-                            saveBtn.disabled = true;
-                            saveBtn.textContent = 'Saving…';
-                            try {
-                                const res = await fetch('/api/profiles/create', {
-                                    method: 'POST',
-                                    headers: {
-                                        'Content-Type': 'application/json',
-                                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content,
-                                    },
-                                    body: JSON.stringify({
-                                        name,
-                                        price_data,
-                                        make_default: document.getElementById('np-default').checked,
-                                    }),
-                                });
-                                const body = await res.json();
-                                if (!res.ok || body.status !== 'success') throw new Error(body.message || 'Save failed');
-
-                                // Add + select new profile in the dropdown
-                                const opt = document.createElement('option');
-                                opt.value = body.profile.name;
-                                opt.textContent = body.profile.name;
-                                opt.selected = true;
-                                select.appendChild(opt);
-                                select.value = body.profile.name;
-
-                                // Register the new profile's price_data for client-side auto-fill,
-                                // then populate the rate fields with it.
-                                if (window.__profilesData) window.__profilesData[body.profile.name] = price_data;
-                                if (window.__populateRates) window.__populateRates(body.profile.name);
-
-                                close();
-                            } catch (e) {
-                                errEl.textContent = e.message;
-                                errEl.classList.remove('hidden');
-                            } finally {
-                                saveBtn.disabled = false;
-                                saveBtn.textContent = 'Save & Use';
-                            }
-                        });
-                    })();
-                    </script>
+                    {# H10 T1: form-state persistence + URL rewrite moved to static/js/quote-form.js #}
+                    {# H10 T1: populateRates + new-profile panel handler → static/js/profile-loader.js #}
                     <div class="space-y-4">
                         <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">Window Pane Counts</h3>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -556,15 +324,7 @@
                     </h2>
                     
                     {% if result %}
-                    <script>
-                        // After a POST to /calculate the URL bar shows /calculate, so
-                        // hitting Ctrl+R re-submits the form and the previous quote
-                        // sticks around. Rewriting the URL to "/" makes refresh hit the
-                        // fresh GET form instead. (Pure UX shim — server logic unchanged.)
-                        if (window.location.pathname !== '/') {
-                            window.history.replaceState({}, '', '/');
-                        }
-                    </script>
+                    {# H10 T1: POST→GET URL rewrite → merged into static/js/quote-form.js #}
                     <div class="space-y-4">
                         <div class="flex justify-between items-center py-2 border-b border-slate-800">
                             <span class="text-slate-400 text-sm">Subtotal</span>
@@ -617,94 +377,7 @@
                                 "customer_phone": submitted_customer_phone or "",
                             } | tojson }}
                         </script>
-                        <script>
-                        (function () {
-                            const btn = document.getElementById('download-pdf-btn');
-                            const label = document.getElementById('download-pdf-label');
-                            const invBtn = document.getElementById('convert-invoice-btn');
-                            const invLabel = document.getElementById('convert-invoice-label');
-                            const errEl = document.getElementById('download-error');
-                            const badge = document.getElementById('credit-badge');
-                            const payload = JSON.parse(document.getElementById('quote-payload').textContent);
-
-                            let generatedQuoteId = null;
-
-                            btn.addEventListener('click', async function () {
-                                btn.disabled = true;
-                                errEl.classList.add('hidden');
-                                label.textContent = 'Generating…';
-
-                                try {
-                                    const res = await fetch('/generate', {
-                                        method: 'POST',
-                                        headers: {
-                                            'Content-Type': 'application/json',
-                                            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content,
-                                        },
-                                        body: JSON.stringify(payload),
-                                    });
-
-                                    if (res.status === 402) {
-                                        const body = await res.json().catch(() => ({}));
-                                        window.location.href = body.redirect || '/top-up';
-                                        return;
-                                    }
-
-                                    const data = await res.json();
-                                    if (!res.ok || data.status !== 'success') {
-                                        throw new Error(data.message || 'Failed to generate PDF.');
-                                    }
-
-                                    badge.textContent = data.credits_remaining + ' credits';
-                                    label.textContent = 'Downloading…';
-                                    // BUG-004: quote was generated successfully — wipe the
-                                    // saved draft so the user gets a fresh form on return.
-                                    if (typeof window.__clearQuoteDraft === 'function') window.__clearQuoteDraft();
-                                    window.location.href = data.download_url;
-
-                                    generatedQuoteId = data.quote_id;
-                                    invBtn.disabled = false;
-                                    invBtn.classList.remove('bg-slate-800', 'text-slate-300');
-                                    invBtn.classList.add('bg-emerald-600', 'hover:bg-emerald-500', 'text-white');
-
-                                    setTimeout(() => { label.textContent = 'Download Quote PDF'; btn.disabled = false; }, 1500);
-                                } catch (e) {
-                                    errEl.textContent = e.message;
-                                    errEl.classList.remove('hidden');
-                                    label.textContent = 'Download Quote PDF';
-                                    btn.disabled = false;
-                                }
-                            });
-
-                            invBtn.addEventListener('click', async function () {
-                                if (!generatedQuoteId) return;
-                                invBtn.disabled = true;
-                                errEl.classList.add('hidden');
-                                invLabel.textContent = 'Converting…';
-                                try {
-                                    const res = await fetch(`/quotes/${generatedQuoteId}/pdf?type=INVOICE`, {
-                                        method: 'POST',
-                                        headers: {
-                                            'Accept': 'application/json',
-                                            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content,
-                                        },
-                                    });
-                                    const data = await res.json();
-                                    if (!res.ok || data.status !== 'success') {
-                                        throw new Error(data.message || 'Failed to convert to invoice.');
-                                    }
-                                    invLabel.textContent = 'Downloading…';
-                                    window.location.href = data.download_url;
-                                    setTimeout(() => { invLabel.textContent = 'Convert to Invoice (free)'; invBtn.disabled = false; }, 1500);
-                                } catch (e) {
-                                    errEl.textContent = e.message;
-                                    errEl.classList.remove('hidden');
-                                    invLabel.textContent = 'Convert to Invoice (free)';
-                                    invBtn.disabled = false;
-                                }
-                            });
-                        })();
-                        </script>
+                        {# H10 T1: PDF download + invoice conversion → static/js/pdf-download.js (loaded below, conditional on result) #}
                     </div>
                     {% else %}
                     <div class="text-center py-12 space-y-4">
@@ -716,5 +389,15 @@
         </div>
     </main>
     {% include "_footer.html" %}
+    {# H10 T1: externalized scripts. Order: quote-form (defines
+       window.__clearQuoteDraft) → profile-loader (uses __populateRates,
+       __profilesData) → pdf-download (uses __clearQuoteDraft).
+       defer guarantees execution after DOM parse; no DOMContentLoaded
+       guards needed (Inquisitor C4). #}
+    <script defer src="{{ url_for('static', filename='js/quote-form.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/profile-loader.js') }}"></script>
+    {% if result %}
+    <script defer src="{{ url_for('static', filename='js/pdf-download.js') }}"></script>
+    {% endif %}
 </body>
 </html>

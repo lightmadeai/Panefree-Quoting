@@ -286,22 +286,29 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 #   - fonts.gstatic.com (font)                — Google Fonts files
 #   - js.stripe.com (script + frame)          — Stripe Checkout JS + iframe
 #   - api.stripe.com (connect)                — Stripe API from JS
-# style-src needs 'unsafe-inline' because templates use <style> blocks.
-# script-src needs 'unsafe-inline' because index.html has inline <script>
-# blocks (profile-data injection + populateRates definition). H8 added
-# this; H10 will externalize the inline scripts to static/js/ and then
-# remove 'unsafe-inline' from script-src.
+# style-src still needs 'unsafe-inline' because templates use inline
+# <style> blocks for the font-family declaration. Removing it requires
+# a nonce/hash approach — deferred to a future hardening sprint.
+#
+# Hotfix 10: removed 'unsafe-inline' from script-src — all previously
+# inline <script> blocks in index.html were externalized to
+# static/js/{quote-form,profile-loader,pdf-download}.js and the only
+# remaining inline scripts are <script type="application/json"> data
+# containers, which CSP script-src does not apply to. After H10 the
+# script-src allowlist is the minimum viable set: 'self' for our own
+# externalized JS, js.stripe.com for Stripe Checkout. No wildcards,
+# no inline, no CDN. See DEPLOYMENT.md §8.5 + §2.8.
 #
 # Hotfix 9a: removed `cdn.tailwindcss.com` from script-src — Tailwind is
 # now compiled to static/css/output.css at build time, so the CDN script
-# is no longer loaded. See DEPLOYMENT.md §8.5.
+# is no longer loaded.
 #
 # force_https mirrors the cookie-SECURE gate from T1: prod redirects HTTP
 # -> HTTPS, dev (DEV_MODE=1) skips the redirect so plain-HTTP localhost
 # still works.
 _TALISMAN_CSP = {
     "default-src": "'self'",
-    "script-src": ["'self'", "'unsafe-inline'", "js.stripe.com"],
+    "script-src": ["'self'", "js.stripe.com"],
     "style-src": ["'self'", "'unsafe-inline'", "fonts.googleapis.com"],
     "font-src": ["'self'", "fonts.gstatic.com"],
     "img-src": ["'self'", "data:"],

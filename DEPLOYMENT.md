@@ -131,6 +131,29 @@ kill $SERVER_PID
 
 Expected: `400` on the CSRF probe, all five headers in the grep output. Missing CSP or HSTS is a deployment blocker — re-check `DEV_MODE` is unset and Talisman initialized.
 
+**Expected `Content-Security-Policy` value (post-Hotfix-10):**
+
+```
+default-src 'self';
+script-src 'self' js.stripe.com;
+style-src 'self' 'unsafe-inline' fonts.googleapis.com;
+font-src 'self' fonts.gstatic.com;
+img-src 'self' data:;
+connect-src 'self' api.stripe.com;
+frame-src js.stripe.com;
+frame-ancestors 'none';
+base-uri 'self';
+form-action 'self' checkout.stripe.com
+```
+
+CSP timeline (worth knowing if a future audit asks "why this allowlist"):
+- **Hotfix-2** (2026-05-11) — initial Talisman CSP. `script-src` was `'self' 'unsafe-inline' cdn.tailwindcss.com js.stripe.com`.
+- **Hotfix-8** (2026-05-19) — added `'unsafe-inline'` to `script-src` to unblock the inline scripts in `index.html` after they regressed under CSP. Temporary measure; logged as tech debt.
+- **Hotfix-9a** (2026-05-19) — removed `cdn.tailwindcss.com` after Tailwind moved to build-time compile (see §8.5). `script-src` became `'self' 'unsafe-inline' js.stripe.com`.
+- **Hotfix-10** (2026-05-26) — externalized all 4 inline `<script>` blocks in `index.html` to `static/js/{quote-form,profile-loader,pdf-download}.js`, then removed `'unsafe-inline'` from `script-src`. `script-src` is now `'self' js.stripe.com` — minimum viable for our deploy. **Any future regression that re-adds `'unsafe-inline'` should be flagged in code review.**
+
+`style-src 'unsafe-inline'` is still present — every page template carries an inline `<style>body { font-family: 'Inter', sans-serif; }</style>` block. Removing it requires a nonce/hash approach (or moving the rule to `output.css`). Deferred to a future hardening sprint.
+
 ### 2.9 Dependency vulnerability scan
 
 ```bash
@@ -157,8 +180,23 @@ project_root/
 │   └── _legacy_unattributed/        # Hotfix-1 T3 quarantine (pre-BUG-008 PDFs)
 ├── templates/                       # Jinja2
 ├── static/                          # served by Flask (or upstream nginx)
+│   ├── css/
+│   │   ├── input.css                # Tailwind directives, source (H9a)
+│   │   └── output.css               # Compiled build artifact, gitignored (H9a)
+│   ├── img/
+│   │   ├── logo.svg                 # Fiverr logo, original colors (H9b)
+│   │   └── logo-light.svg           # White-wordmark variant for dark nav (H9b)
+│   └── js/                          # H10 externalized scripts (CSP: 'self')
+│       ├── nav.js                   # Mobile drawer toggle (H9b)
+│       ├── quote-form.js            # Form-state persistence + URL rewrite (H10)
+│       ├── profile-loader.js        # populateRates + new-profile panel (H10)
+│       └── pdf-download.js          # PDF download + invoice convert (H10)
+├── package.json, tailwind.config.js # Build pipeline for static/css/output.css (H9a)
+├── node_modules/                    # Build-time only, gitignored (H9a)
 └── PLANNING/, testing/              # Not served
 ```
+
+The `static/js/` files are loaded via `<script defer src="...">` from `index.html` and `_nav.html`. They MUST remain `'self'`-served for CSP `script-src` to keep its post-H10 minimum-viable allowlist (see §2.8). Any new client-side script — including third-party widgets — should land in `static/js/` and be referenced by `url_for('static', filename='js/...')`, not pasted inline.
 
 **The `output/` directory must be writable** by the application user but **not** accessible via any web-server alias. The `/download/<filename>` route is the only legitimate way to fetch PDFs and pins lookups to the caller's own bucket. See "BUG-008 architecture" below.
 
@@ -295,7 +333,7 @@ The config has two important arrays:
 
 ### CSP interaction (Hotfix 10 boundary)
 
-Hotfix 9a removes `cdn.tailwindcss.com` from `script-src` (it's no longer needed — the CDN was the only third-party script source). It does NOT remove `'unsafe-inline'` from `script-src` — that's deferred to Hotfix 10, which first externalizes the inline `<script>` blocks in `index.html` and then tightens CSP. `style-src 'unsafe-inline'` stays for now (templates have inline `<style>` blocks with the Inter font-family declaration).
+Hotfix 9a removes `cdn.tailwindcss.com` from `script-src` (it's no longer needed — the CDN was the only third-party script source). Hotfix 10 then externalized the inline `<script>` blocks in `index.html` to `static/js/` and removed `'unsafe-inline'` from `script-src`. Post-H10, `script-src` is `'self' js.stripe.com` — see §2.8 for the full timeline. `style-src 'unsafe-inline'` stays for now (templates have inline `<style>` blocks with the Inter font-family declaration); deferred to a future hardening sprint.
 
 ---
 

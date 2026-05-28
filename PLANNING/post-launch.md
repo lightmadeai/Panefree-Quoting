@@ -8,12 +8,20 @@ Status: Planning
 ## 🔴 Launch Day Checklist
 These must happen the day we flip the DNS switch:
 
-- [ ] **Stripe live key swap** — test → live keys in production config
+- [x] **Stripe live key swap** — Chris confirmed configured
 - [ ] **HTTPS enforcement** — confirm infrastructure-level redirect
 - [ ] **Production deployment** — push to live environment
 - [ ] **Manual visual QA** — Chris walkthrough of live site
 - [ ] **Monitoring/alerting setup** — uptime + error tracking
 - [ ] **DB backup** — one-time operational action, confirm B2 bucket
+
+### 🐛 Known Bugs — URGENT (Flagged May 15)
+- [ ] **Mobile scaling broken** — 15/17 templates missing `<meta name="viewport">` tag. Only index.html and settings.html have it. All auth pages, profiles, history, account pages render at desktop width on phones. **Fix: batch add viewport meta tag to all 15 missing templates.**
+- [ ] **Quote generation not working (mobile)** — Chris reported the main function is broken on phone. Cause TBD. Possible causes: email verification gate blocking, JS error on mobile, form submission issue. **Needs mobile browser reproduction to diagnose.**
+
+### Pre-Launch Agent Setup (Week 1-2 post-launch deadline)
+- [ ] **Uptime Watcher Agent** — monitors service tracking sites (UptimeRobot, etc.), alerts on downtime, tracks incident history
+- [ ] **Support Email Agent** — Gmail access for support@panefreequoting.com, monitors incoming emails, can send outbound blasts for outage notifications
 
 ---
 
